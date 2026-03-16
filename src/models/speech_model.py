@@ -1,13 +1,38 @@
+"""Модуль для извлечения speech embedding из аудио.
+
+Важно: это НЕ распознавание речи (не ASR и не Whisper).
+Этот код превращает аудиосигнал в вектор признаков с помощью Wav2Vec2.
+"""
+
+from __future__ import annotations
+
 import torch
 import numpy as np
 from transformers import AutoFeatureExtractor, Wav2Vec2Model
+from typing import Any
 
 # ===============================
 # Класс для извлечения эмбеддингов (умных признаков) из речи с помощью Wav2Vec2.
 # ===============================
 class SpeechEmbeddingModel:
+    """Извлекает эмбеддинги речи (speech embeddings) с помощью Wav2Vec2.
 
-    def __init__(self, model_name="facebook/wav2vec2-large-xlsr-53", device=None):
+    Что делает:
+    - Принимает аудио (numpy/torch, 1D) или список аудио разной длины.
+    - Возвращает фиксированный вектор признаков (эмбеддинг) на каждый пример.
+
+    Что НЕ делает:
+    - Не распознаёт текст (это не Whisper / не Wav2Vec2ForCTC).
+
+    Основной метод:
+    - `extract_embedding(audio) -> torch.Tensor` формы `(batch, hidden_size)`.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "facebook/wav2vec2-large-xlsr-53",
+        device: str | torch.device | None = None,
+    ) -> None:
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
         self.model = Wav2Vec2Model.from_pretrained(model_name)
@@ -23,13 +48,25 @@ class SpeechEmbeddingModel:
     # Возвращает размерность эмбеддинга.
     # ===============================
     @property
-    def embedding_dim(self):
+    def embedding_dim(self) -> int:
         return int(self.model.config.hidden_size)
 
     # ===============================
     # Превращает аудио в эмбеддинг.
     # ===============================
-    def extract_embedding(self, audio, sample_rate=16000):
+    def extract_embedding(self, audio: Any, sample_rate: int = 16000) -> torch.Tensor:
+        """Преобразует аудио в эмбеддинг.
+
+        Параметры:
+            audio: `np.ndarray`/`torch.Tensor` (1D) или список таких объектов.
+            sample_rate: частота дискретизации входного сигнала (обычно 16000).
+
+        Возвращает:
+            `torch.Tensor` формы `(batch, hidden_size)`.
+
+        Исключения:
+            Может выбросить исключения HuggingFace/torch при проблемах с моделью.
+        """
 
         if isinstance(audio, torch.Tensor):
             audio = audio.detach().cpu().numpy()
@@ -63,7 +100,8 @@ class SpeechEmbeddingModel:
         if attention_mask is None:
             embedding = torch.mean(hidden_states, dim=1)
         else:
-            # Convert input attention mask to feature-vector mask (after conv subsampling).
+            # Переводим attention_mask из маски "по сэмплам" в маску "по фичам"
+            # (Wav2Vec2 внутри сначала делает сверточное субдискретизирование).
             feature_mask = self.model._get_feature_vector_attention_mask(
                 hidden_states.shape[1],
                 attention_mask,

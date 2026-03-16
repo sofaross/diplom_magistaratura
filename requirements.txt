@@ -9,3 +9,4 @@ transformers
 protobuf
 soundfile
 tqdm
+sounddevice

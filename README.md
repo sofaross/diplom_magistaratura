@@ -65,7 +65,13 @@ Multimodal fusion model (после обучения emotion model):
 python -m src.training.train_multimodal --device cpu
 ```
 
-Извлечение speech embedding для одного файла:
+Извлечение speech embedding (Wav2Vec2) для одного файла:
+
+```bash
+python -m src.training.extract_speech_embedding --audio-path data/raw/test_audio/example.wav --device cpu
+```
+
+Старое имя (оставлено для совместимости):
 
 ```bash
 python -m src.training.train_speech --audio-path data/raw/test_audio/example.wav --device cpu
