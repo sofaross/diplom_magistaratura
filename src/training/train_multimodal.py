@@ -1,0 +1,204 @@
+import argparse
+import json
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
+
+from src.evaluation.evaluation import evaluate_fusion_model
+from src.models.emotion_model import EmotionModel
+from src.models.multimodal_model import FusionModel
+from src.models.speech_model import SpeechEmbeddingModel
+from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
+
+
+def _load_emotion_map(path: Path):
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    emotion_to_id = payload.get("emotion_to_id")
+    if not isinstance(emotion_to_id, dict) or not emotion_to_id:
+        raise ValueError(f"Invalid emotion map JSON: {path}")
+    return {str(k): int(v) for k, v in emotion_to_id.items()}
+
+
+def _load_state_dict(checkpoint_path: Path):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+    if isinstance(checkpoint, dict):
+        return checkpoint
+    raise ValueError(f"Unsupported checkpoint format: {checkpoint_path}")
+
+
+def train_fusion_model(
+    fusion_model,
+    speech_model,
+    emotion_model,
+    train_loader,
+    val_loader,
+    epochs=5,
+    lr=5e-4,
+    device="cpu",
+    out_dir=None,
+):
+    device = torch.device(device)
+    fusion_model.to(device)
+    emotion_model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(fusion_model.parameters(), lr=lr)
+
+    best_val_acc = -1.0
+    best_state_dict = None
+
+    for epoch in range(1, epochs + 1):
+        fusion_model.train()
+
+        running_loss = 0.0
+        num_samples = 0
+
+        for audios, mels, labels in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False):
+            mels = mels.to(device)
+            labels = labels.to(device)
+
+            with torch.inference_mode():
+                speech_emb = speech_model.extract_embedding(audios)
+                emotion_emb = emotion_model.extract_embedding(mels)
+
+            optimizer.zero_grad(set_to_none=True)
+
+            logits = fusion_model(speech_emb, emotion_emb)
+            loss = criterion(logits, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            batch_size = int(labels.shape[0])
+            running_loss += float(loss.item()) * batch_size
+            num_samples += batch_size
+
+        train_loss = running_loss / max(1, num_samples)
+        val_metrics = evaluate_fusion_model(
+            fusion_model,
+            speech_model,
+            emotion_model,
+            val_loader,
+            device=device,
+        )
+        val_acc = float(val_metrics["accuracy"])
+
+        print(
+            f"[fusion] epoch={epoch} train_loss={train_loss:.4f} "
+            f"val_acc={val_acc:.4f} val_f1_macro={val_metrics['f1_macro']:.4f}"
+        )
+
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {"state_dict": fusion_model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
+                out_dir / "fusion_model_last.pt",
+            )
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_state_dict = {k: v.detach().cpu().clone() for k, v in fusion_model.state_dict().items()}
+            if out_dir is not None:
+                torch.save(
+                    {"state_dict": fusion_model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
+                    out_dir / "fusion_model_best.pt",
+                )
+
+    if best_state_dict is not None:
+        fusion_model.load_state_dict(best_state_dict)
+
+    return fusion_model
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="python -m src.training.train_multimodal")
+    parser.add_argument("--crema-path", default="data/raw/crema-d/AudioWAV")
+    parser.add_argument("--ravdess-path", default="data/raw/ravdess")
+    parser.add_argument("--speech-model-name", default="facebook/wav2vec2-large-xlsr-53")
+    parser.add_argument("--emotion-checkpoint", default="data/processed/models/emotion/emotion_model_best.pt")
+    parser.add_argument("--emotion-map-json", default="data/processed/models/emotion/emotion_map.json")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--out-dir", default="data/processed/models/fusion")
+    args = parser.parse_args()
+
+    emotion_map = _load_emotion_map(Path(args.emotion_map_json))
+
+    train_df, val_df, test_df, _ = prepare_splits(
+        args.crema_path,
+        args.ravdess_path,
+        emotion_map=emotion_map,
+        verbose=True,
+    )
+
+    train_ds = MultimodalDataset(train_df)
+    val_ds = MultimodalDataset(val_df)
+    test_ds = MultimodalDataset(test_df)
+
+    train_loader, val_loader, test_loader = create_multimodal_dataloaders(
+        train_ds,
+        val_ds,
+        test_ds,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
+
+    device = torch.device(args.device)
+
+    speech_model = SpeechEmbeddingModel(model_name=args.speech_model_name, device=device)
+
+    emotion_model = EmotionModel(num_emotions=len(emotion_map))
+    emotion_model.load_state_dict(_load_state_dict(Path(args.emotion_checkpoint)))
+    emotion_model.to(device)
+    emotion_model.eval()
+
+    fusion_model = FusionModel(
+        speech_dim=speech_model.embedding_dim,
+        emotion_dim=128,
+        num_classes=len(emotion_map),
+    )
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fusion_model = train_fusion_model(
+        fusion_model,
+        speech_model,
+        emotion_model,
+        train_loader,
+        val_loader,
+        epochs=args.epochs,
+        lr=args.lr,
+        device=device,
+        out_dir=out_dir,
+    )
+
+    test_metrics = evaluate_fusion_model(
+        fusion_model,
+        speech_model,
+        emotion_model,
+        test_loader,
+        device=device,
+    )
+    print(
+        f"[fusion] test_acc={test_metrics['accuracy']:.4f} "
+        f"test_f1_macro={test_metrics['f1_macro']:.4f}"
+    )
+
+    torch.save(
+        {"state_dict": fusion_model.state_dict(), "test_metrics": test_metrics},
+        out_dir / "fusion_model_final.pt",
+    )
+
+
+if __name__ == "__main__":
+    main()
