@@ -1,0 +1,22 @@
+{
+  "emotion_to_id": {
+    "angry": 0,
+    "calm": 1,
+    "disgust": 2,
+    "fear": 3,
+    "happy": 4,
+    "neutral": 5,
+    "sad": 6,
+    "surprise": 7
+  },
+  "id_to_emotion": [
+    "angry",
+    "calm",
+    "disgust",
+    "fear",
+    "happy",
+    "neutral",
+    "sad",
+    "surprise"
+  ]
+}
