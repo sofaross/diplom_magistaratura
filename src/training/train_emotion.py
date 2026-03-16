@@ -1,6 +1,13 @@
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import argparse
 import json
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -10,6 +17,13 @@ from tqdm import tqdm
 from src.evaluation.evaluation import evaluate_emotion_model
 from src.models.emotion_model import EmotionModel
 from src.utils.dataset_loader import create_dataloaders, prepare_datasets
+
+
+def _resolve_repo_path(value):
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
 
 
 def _build_id_to_emotion(emotion_map):
@@ -64,8 +78,8 @@ def train_emotion_model(
         val_acc = float(val_metrics["accuracy"])
 
         print(
-            f"[emotion] epoch={epoch} train_loss={train_loss:.4f} "
-            f"val_acc={val_acc:.4f} val_f1_macro={val_metrics['f1_macro']:.4f}"
+            f"[эмоция] эпоха={epoch} ошибка_обучения={train_loss:.4f} "
+            f"точность_проверки={val_acc:.4f} f1_макро_проверки={val_metrics['f1_macro']:.4f}"
         )
 
         if out_dir is not None:
@@ -102,7 +116,14 @@ def main():
     parser.add_argument("--out-dir", default="data/processed/models/emotion")
     args = parser.parse_args()
 
-    train_ds, val_ds, test_ds, emotion_map = prepare_datasets(args.crema_path, args.ravdess_path)
+    crema_path = _resolve_repo_path(args.crema_path)
+    ravdess_path = _resolve_repo_path(args.ravdess_path)
+    out_dir = _resolve_repo_path(args.out_dir)
+
+    try:
+        train_ds, val_ds, test_ds, emotion_map = prepare_datasets(crema_path, ravdess_path)
+    except ValueError as e:
+        raise SystemExit(str(e))
     train_loader, val_loader, test_loader = create_dataloaders(
         train_ds,
         val_ds,
@@ -111,7 +132,6 @@ def main():
         num_workers=args.num_workers,
     )
 
-    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     id_to_emotion = _build_id_to_emotion(emotion_map)
@@ -136,8 +156,8 @@ def main():
 
     test_metrics = evaluate_emotion_model(model, test_loader, device=args.device)
     print(
-        f"[emotion] test_acc={test_metrics['accuracy']:.4f} "
-        f"test_f1_macro={test_metrics['f1_macro']:.4f}"
+        f"[эмоция] точность_экзамена={test_metrics['accuracy']:.4f} "
+        f"f1_макро_экзамена={test_metrics['f1_macro']:.4f}"
     )
 
     torch.save(

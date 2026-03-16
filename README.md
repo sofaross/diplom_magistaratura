@@ -30,7 +30,7 @@ CREMA-D + RAVDESS
 
 speech embedding + emotion embedding -> классификатор эмоций
 
-Код: `src/models/fusion_model.py` (`FusionModel`)
+Код: `src/models/multimodal_model.py` (`FusionModel`)
 
 ## Запуск как пакет
 

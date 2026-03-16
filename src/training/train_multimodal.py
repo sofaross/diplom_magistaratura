@@ -1,6 +1,15 @@
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+if __name__ == "__main__" and __package__ is None:
+    # Позволяет запускать файл напрямую (зелёная кнопка в PyCharm) как скрипт,
+    # но при этом импортировать `src.*` как пакет.
+    sys.path.insert(0, str(REPO_ROOT))
+
 import argparse
 import json
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -12,6 +21,13 @@ from src.models.emotion_model import EmotionModel
 from src.models.multimodal_model import FusionModel
 from src.models.speech_model import SpeechEmbeddingModel
 from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
+
+
+def _resolve_repo_path(value):
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
 
 
 def _load_emotion_map(path: Path):
@@ -65,7 +81,10 @@ def train_fusion_model(
 
             with torch.inference_mode():
                 speech_emb = speech_model.extract_embedding(audios)
+                speech_emb = speech_emb.to(device)
+
                 emotion_emb = emotion_model.extract_embedding(mels)
+                emotion_emb = emotion_emb.to(device)
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -131,14 +150,23 @@ def main():
     parser.add_argument("--out-dir", default="data/processed/models/fusion")
     args = parser.parse_args()
 
-    emotion_map = _load_emotion_map(Path(args.emotion_map_json))
+    crema_path = _resolve_repo_path(args.crema_path)
+    ravdess_path = _resolve_repo_path(args.ravdess_path)
+    emotion_checkpoint_path = _resolve_repo_path(args.emotion_checkpoint)
+    emotion_map_json_path = _resolve_repo_path(args.emotion_map_json)
+    out_dir = _resolve_repo_path(args.out_dir)
 
-    train_df, val_df, test_df, _ = prepare_splits(
-        args.crema_path,
-        args.ravdess_path,
-        emotion_map=emotion_map,
-        verbose=True,
-    )
+    emotion_map = _load_emotion_map(emotion_map_json_path)
+
+    try:
+        train_df, val_df, test_df, _ = prepare_splits(
+            crema_path,
+            ravdess_path,
+            emotion_map=emotion_map,
+            verbose=True,
+        )
+    except ValueError as e:
+        raise SystemExit(str(e))
 
     train_ds = MultimodalDataset(train_df)
     val_ds = MultimodalDataset(val_df)
@@ -157,7 +185,7 @@ def main():
     speech_model = SpeechEmbeddingModel(model_name=args.speech_model_name, device=device)
 
     emotion_model = EmotionModel(num_emotions=len(emotion_map))
-    emotion_model.load_state_dict(_load_state_dict(Path(args.emotion_checkpoint)))
+    emotion_model.load_state_dict(_load_state_dict(emotion_checkpoint_path))
     emotion_model.to(device)
     emotion_model.eval()
 
@@ -167,7 +195,6 @@ def main():
         num_classes=len(emotion_map),
     )
 
-    out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     fusion_model = train_fusion_model(

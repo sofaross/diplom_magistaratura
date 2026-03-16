@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 
 import pandas as pd
 import torch
@@ -67,7 +68,7 @@ def load_crema_d(dataset_path):
             "dataset": "crema_d"
         })
 
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(data, columns=["path", "emotion", "dataset"])
 
     return df
 
@@ -104,7 +105,7 @@ def load_ravdess(dataset_path):
             "dataset": "ravdess"
         })
 
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(data, columns=["path", "emotion", "dataset"])
 
     return df
 
