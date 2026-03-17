@@ -22,8 +22,8 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.realtime.audio_capture import MicrophoneCapture
-from src.realtime.audio_processor import AudioProcessor
-from src.realtime.emotion_recognizer import EmotionRecognizer
+from src.preprocessing.audio_processing import AudioProcessor
+from src.models.emotion_recognizer import EmotionRecognizer
 from src.realtime.models_loader import EMOTION_RU, _resolve_repo_path
 from src.models.speech_model import Wav2Vec2Multimodal
 

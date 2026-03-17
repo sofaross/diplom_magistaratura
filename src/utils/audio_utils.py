@@ -1,7 +1,7 @@
 import torch
 
 from src.features.feature_extraction import extract_mel_spectrogram
-from src.preprocessing.audio_preprocessing import load_audio, normalize_audio, trim_silence
+from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
 
 
 def load_audio_for_models(path, sample_rate=16000):

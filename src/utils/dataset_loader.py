@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from src.features.feature_extraction import extract_mel_spectrogram
-from src.preprocessing.audio_preprocessing import load_audio, normalize_audio, trim_silence
+from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
 
 
 # ===============================

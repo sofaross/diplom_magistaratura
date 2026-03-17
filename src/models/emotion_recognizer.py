@@ -14,22 +14,14 @@ import numpy as np
 import torch
 
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
-from src.realtime.audio_processor import AudioProcessor
+from src.preprocessing.audio_processing import AudioProcessor
 from src.realtime.models_loader import _load_emotion_map, _load_state_dict, _resolve_repo_path
 
-
+# ===============================
+# Класс для распознавания эмоции по голосу.
+# ===============================
 class EmotionRecognizer:
-    """Класс для распознавания эмоции по голосу.
-
-    Основные методы:
-    - `recognize(audio)` -> (emotion_label, probabilities)
-
-    Пример:
-        processor = AudioProcessor(sample_rate=16000)
-        emo = EmotionRecognizer("emotion_model_best.pt", "emotion_map.json", audio_processor=processor)
-        emotion, probs = emo.recognize(audio_np)
-    """
-
+    #Создаёт распознаватель эмоций и загружает модель.
     def __init__(
         self,
         emotion_model_path: str | Path,
@@ -38,18 +30,6 @@ class EmotionRecognizer:
         device: torch.device | str | None = None,
         audio_processor: AudioProcessor | None = None,
     ):
-        """Создаёт распознаватель эмоций и загружает модель.
-
-        Args:
-            emotion_model_path: путь к чекпоинту (.pt).
-            emotion_map_path: путь к emotion_map.json.
-            device: устройство PyTorch ("cpu", "cuda", torch.device).
-            audio_processor: общий процессор аудио (если хотите переиспользовать один и тот же).
-
-        Raises:
-            ValueError: если emotion_map.json имеет неверный формат.
-            RuntimeError: если чекпоинт не удалось загрузить ни в одну архитектуру.
-        """
 
         self.emotion_model_path = _resolve_repo_path(emotion_model_path)
         self.emotion_map_path = _resolve_repo_path(emotion_map_path)
@@ -65,21 +45,8 @@ class EmotionRecognizer:
 
         self.model: torch.nn.Module = self.load_model(self.emotion_model_path)
 
+    #Загружает emotion-модель из чекпоинта.
     def load_model(self, checkpoint_path: Path) -> torch.nn.Module:
-        """Загружает emotion-модель из чекпоинта.
-
-        Мы пробуем сначала `EmotionModelImproved`, затем `EmotionModel`, чтобы поддерживать
-        разные варианты архитектур, сохранённые в проекте.
-
-        Args:
-            checkpoint_path: путь к .pt файлу.
-
-        Returns:
-            torch.nn.Module в режиме eval().
-
-        Raises:
-            RuntimeError: если ни одна архитектура не смогла загрузиться.
-        """
 
         state = _load_state_dict(checkpoint_path)
 
@@ -99,20 +66,8 @@ class EmotionRecognizer:
             + "\n".join(errors)
         )
 
+    #Превращает аудио в (mel, lengths) для emotion-модели.
     def _preprocess_audio(self, audio: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
-        """Превращает аудио в (mel, lengths) для emotion-модели.
-
-        Args:
-            audio: np.ndarray float32, 16 kHz.
-
-        Returns:
-            mel: torch.Tensor [B=1, 1, 128, T]
-            lengths: torch.Tensor [B=1] (кол-во фреймов T до padding)
-
-        Raises:
-            ValueError: если аудио пустое после trim_silence.
-        """
-
         x = np.asarray(audio, dtype=np.float32)
         x = self.audio_processor.normalize(x)
         x = self.audio_processor.trim_silence(x)
@@ -127,22 +82,8 @@ class EmotionRecognizer:
         lengths = torch.tensor([int(mel.shape[-1])], dtype=torch.long, device=self.device)
         return mel, lengths
 
+    #Распознаёт эмоцию по аудио.
     def recognize(self, audio: np.ndarray) -> tuple[str, dict[str, float]]:
-        """Распознаёт эмоцию по аудио.
-
-        Args:
-            audio: np.ndarray float32, 16kHz.
-
-        Returns:
-            (emotion_label, prob_map)
-            - emotion_label: строка из id_to_emotion (как в emotion_map.json).
-            - prob_map: словарь emotion->probability.
-
-        Raises:
-            ValueError: если аудио слишком короткое/пустое после обработки.
-            RuntimeError: если выход модели не совпадает с emotion_map.
-        """
-
         mel, lengths = self._preprocess_audio(audio)
 
         with torch.inference_mode():

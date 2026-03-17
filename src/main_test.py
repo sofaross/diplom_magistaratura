@@ -5,7 +5,7 @@ def _smoke_check():
     import numpy as np
     import torch
 
-    from src.preprocessing.audio_preprocessing import normalize_audio
+    from src.preprocessing.audio_processing import normalize_audio
     from src.models.emotion_model import EmotionModel
     from src.utils.dataset_loader import pad_mels_collate_fn
 
@@ -45,4 +45,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

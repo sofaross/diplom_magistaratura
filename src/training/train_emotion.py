@@ -1,11 +1,6 @@
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-if __name__ == "__main__" and __package__ is None:
-    sys.path.insert(0, str(REPO_ROOT))
-
 import argparse
 import json
 import random
@@ -19,6 +14,10 @@ from src.evaluation.evaluation import evaluate_emotion_model
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
 from src.utils.dataset_loader import MelAugmentConfig, create_dataloaders, prepare_datasets
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(REPO_ROOT))
 
 def _resolve_repo_path(value):
     path = Path(value)

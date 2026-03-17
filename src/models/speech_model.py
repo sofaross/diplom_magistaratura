@@ -1,17 +1,3 @@
-"""Единый Wav2Vec2 класс для мультимодальности: ASR (текст) + эмбеддинги.
-
-Идея:
-- Раньше в проекте ASR (текст) и speech-эмбеддинги жили в разных классах.
-
-Этот модуль делает логичнее: один Wav2Vec2 с CTC-головой делает и то, и другое.
-
-Важно:
-- Для распознавания текста нужна модель Wav2Vec2, ДОобученная под ASR (CTC head).
-  Например:
-    - "facebook/wav2vec2-base-960h" (английский)
-    - "jonatasgrosman/wav2vec2-large-xlsr-53-russian" (русский)
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,41 +6,26 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.preprocessing.audio_preprocessing import normalize_audio, trim_silence
-
+from src.preprocessing.audio_processing import normalize_audio, trim_silence
 
 @dataclass(frozen=True)
 class Wav2Vec2InferenceResult:
-    """Результат одного прогона модели: текст + эмбеддинги."""
-
     texts: list[str]
     embeddings: torch.Tensor  # shape: (batch, hidden_size)
 
-
+# ===============================
+# Мультимодальный Wav2Vec2: текст + эмбеддинги из одной модели.
+# ===============================
 class Wav2Vec2Multimodal:
-    """Wav2Vec2 "2-в-1": распознавание текста (CTC) и извлечение эмбеддингов.
-
-    Основные методы:
-    - `transcribe(audio)` -> str | list[str]
-    - `extract_embedding(audio)` -> torch.Tensor (batch, hidden_size)
-    - `transcribe_and_embed(audio)` -> (text(s), embedding(s)) за ОДИН прогон
-
-    Пример:
-        m = Wav2Vec2Multimodal(model_name="facebook/wav2vec2-base-960h", device="cpu")
-        text, emb = m.transcribe_and_embed(audio_np)   # один прогон
-    """
-
+    #Инициализация мультимодальной Wav2Vec2 модели.
     def __init__(
         self,
         model_name: str = "facebook/wav2vec2-base-960h",
         *,
         device: str | torch.device | None = None,
         sample_rate: int = 16000,
-        # По умолчанию делаем те же шаги, что и в обучении проекта: normalize + trim_silence.
         preprocess: bool = True,
-        # Из какого слоя брать эмбеддинг. -1 = последний слой (самый частый вариант).
         embedding_layer: int = -1,
-        # Если strict=False, объект создаётся даже при ошибке загрузки, а ошибка будет в `load_error`.
         strict: bool = False,
     ) -> None:
         self.model_name = str(model_name)
@@ -154,8 +125,8 @@ class Wav2Vec2Multimodal:
             out.append(x)
         return out
 
+    #Подготавливает аудио для модели
     def _preprocess_audio(self, batch: list[np.ndarray]) -> list[np.ndarray]:
-        """normalize + trim_silence (как в обучении проекта)."""
 
         if not self.preprocess:
             return batch
@@ -318,7 +289,7 @@ class Wav2Vec2Multimodal:
         return out.texts[0] if len(out.texts) == 1 else out.texts
 
     def recognize(self, audio: Any) -> str | list[str]:
-        """Алиас для совместимости с старым `SpeechRecognizer.recognize()`."""
+        """Алиас: `recognize(...)` = `transcribe(...)`."""
 
         return self.transcribe(audio)
 
