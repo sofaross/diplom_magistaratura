@@ -19,7 +19,7 @@ from tqdm import tqdm
 from src.evaluation.evaluation import evaluate_fusion_model
 from src.models.emotion_model import EmotionModel
 from src.models.multimodal_model import FusionModel
-from src.models.speech_model import SpeechEmbeddingModel
+from src.models.wav2vec2_multimodal import Wav2Vec2Multimodal
 from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
 
 
@@ -139,7 +139,14 @@ def main():
     parser = argparse.ArgumentParser(prog="python -m src.training.train_multimodal")
     parser.add_argument("--crema-path", default="data/raw/crema-d/AudioWAV")
     parser.add_argument("--ravdess-path", default="data/raw/ravdess")
-    parser.add_argument("--speech-model-name", default="facebook/wav2vec2-large-xlsr-53")
+    parser.add_argument(
+        "--speech-model-name",
+        default="facebook/wav2vec2-base-960h",
+        help=(
+            "Wav2Vec2 CTC модель из HuggingFace. "
+            "Важно: для распознавания текста нужна модель, дообученная под ASR (CTC head)."
+        ),
+    )
     parser.add_argument("--emotion-checkpoint", default="data/processed/models/emotion/emotion_model_best.pt")
     parser.add_argument("--emotion-map-json", default="data/processed/models/emotion/emotion_map.json")
     parser.add_argument("--epochs", type=int, default=5)
@@ -182,7 +189,14 @@ def main():
 
     device = torch.device(args.device)
 
-    speech_model = SpeechEmbeddingModel(model_name=args.speech_model_name, device=device)
+    # Аудио в MultimodalDataset уже нормализовано и обрезано (trim_silence),
+    # поэтому здесь можно отключить дополнительную предобработку.
+    speech_model = Wav2Vec2Multimodal(
+        model_name=args.speech_model_name,
+        device=device,
+        preprocess=False,
+        strict=True,
+    )
 
     emotion_model = EmotionModel(num_emotions=len(emotion_map))
     emotion_model.load_state_dict(_load_state_dict(emotion_checkpoint_path))

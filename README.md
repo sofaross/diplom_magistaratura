@@ -4,11 +4,19 @@ pip install -r requirements.txt
 
 ### Speech model (pretrained)
 
-Модель: `facebook/wav2vec2-large-xlsr-53`
+Модель: Wav2Vec2 CTC (пример: `facebook/wav2vec2-base-960h`)
 
-Назначение: извлекает **speech embeddings** из аудио (мультиязычная: RU/EN и др.).
+Назначение:
+- распознавание текста (ASR, CTC)
+- извлечение **speech embeddings** из скрытых слоёв (для мультимодальности)
 
-Код: `src/models/speech_model.py` (`SpeechEmbeddingModel`)
+Код: `src/models/wav2vec2_multimodal.py` (`Wav2Vec2Multimodal`)
+
+Пример модели для русского:
+- `jonatasgrosman/wav2vec2-large-xlsr-53-russian`
+
+Legacy:
+- `src/models/speech_model.py` (`SpeechEmbeddingModel`) оставлен как старый вариант "только эмбеддинги".
 
 ### Emotion model (обучаем сами)
 
