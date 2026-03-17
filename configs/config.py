@@ -15,7 +15,8 @@ class ProjectConfig:
     ravdess_path: Path = REPO_ROOT / "data" / "raw" / "ravdess"
 
     # Models
-    speech_model_name: str = "facebook/wav2vec2-large-xlsr-53"
+    # Важно: для ASR нужен Wav2Vec2 с CTC головой (ASR-модель), а не просто "xlsr-53" без CTC.
+    speech_model_name: str = "facebook/wav2vec2-base-960h"
     models_dir: Path = REPO_ROOT / "data" / "processed" / "models"
     emotion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion"
     fusion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "fusion"

@@ -15,9 +15,6 @@ pip install -r requirements.txt
 Пример модели для русского:
 - `jonatasgrosman/wav2vec2-large-xlsr-53-russian`
 
-Legacy:
-- `src/models/speech_model.py` (`SpeechEmbeddingModel`) оставлен как старый вариант "только эмбеддинги".
-
 ### Emotion model (обучаем сами)
 
 Архитектура:
