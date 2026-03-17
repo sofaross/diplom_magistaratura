@@ -19,7 +19,7 @@ from tqdm import tqdm
 from src.evaluation.evaluation import evaluate_fusion_model
 from src.models.emotion_model import EmotionModel
 from src.models.multimodal_model import FusionModel
-from src.models.wav2vec2_multimodal import Wav2Vec2Multimodal
+from src.models.speech_model import Wav2Vec2Multimodal
 from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
 
 
