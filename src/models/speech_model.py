@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from transformers import AutoModelForCTC, AutoProcessor
 
 from src.preprocessing.audio_processing import normalize_audio, trim_silence
 
@@ -59,12 +60,6 @@ class Wav2Vec2Multimodal:
             RuntimeError: если transformers не установлен или модель не загрузилась.
         """
 
-        try:
-            from transformers import AutoModelForCTC, AutoProcessor
-        except Exception as e:
-            raise RuntimeError(
-                "Не удалось импортировать transformers. Установите зависимости: pip install -r requirements.txt"
-            ) from e
 
         try:
             processor = AutoProcessor.from_pretrained(model_name)
