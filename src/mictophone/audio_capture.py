@@ -1,19 +1,44 @@
 from __future__ import annotations
+
+"""Запись аудио с микрофона.
+"""
+
+from pathlib import Path
+
 import numpy as np
 import sounddevice as sd
 
-# ===============================
-# Класс для записи аудио с микрофона
-# ===============================
+from src.mictophone.audio_file_manager import AudioFileManager
+
+save_path = Path(r"/notebooks/withoutNoise")
+
 class MicrophoneCapture:
-    # Настройки микрофона
-    def __init__(self, sample_rate: int = 16000, min_rms: float = 0.005, max_clip_ratio: float = 0.01):
+    """Настройки записи."""
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        min_rms: float = 0.005,
+        max_clip_ratio: float = 0.01,
+        *,
+            file_manager=AudioFileManager(
+                save_dir=save_path,
+                sample_rate=16000
+            ),
+        auto_save: bool = True,
+    ) -> None:
+
         self.sample_rate = int(sample_rate)
         self.min_rms = float(min_rms)
         self.max_clip_ratio = float(max_clip_ratio)
 
-    #Проверяет доступность микрофона
+        self.file_manager = file_manager
+        self.auto_save = bool(auto_save)
+        self.last_saved_path: Path | None = None
+
     def check_microphone(self) -> None:
+        """Проверяет, что микрофон доступен и поддерживает нужные параметры."""
+
         try:
             sd.check_input_settings(samplerate=int(self.sample_rate), channels=1)
         except Exception as e:
@@ -22,11 +47,12 @@ class MicrophoneCapture:
                 "Проверьте устройство ввода в системе."
             ) from e
 
-    #Запись звука
-    def listen(self, duration: float = 5.0) -> np.ndarray:
+    def listen(self, duration: float = 5.0, *, save: bool | None = None, filename: str | None = None) -> np.ndarray:
+        """Записывает звук с микрофона."""
+
         duration = float(duration)
         if duration <= 0:
-            raise ValueError("длительность должена быть > 0")
+            raise ValueError("длительность должна быть > 0")
 
         self.check_microphone()
 
@@ -55,6 +81,22 @@ class MicrophoneCapture:
                 "Уменьшите усиление микрофона."
             )
 
+        # Автосохранение (если включено).
+        do_save = self.auto_save if save is None else bool(save)
+        if do_save:
+            if self.file_manager is None:
+                raise RuntimeError(
+                    "Запрошено сохранение записи, но AudioFileManager не задан. "
+                    "Передайте file_manager=AudioFileManager(...) в MicrophoneCapture."
+                )
+            if int(self.file_manager.sample_rate) != int(self.sample_rate):
+                raise ValueError(
+                    "Нельзя сохранить запись: sample_rate MicrophoneCapture и AudioFileManager не совпадают. "
+                    f"MicrophoneCapture={self.sample_rate}, AudioFileManager={self.file_manager.sample_rate}. "
+                    "Создайте AudioFileManager с таким же sample_rate."
+                )
+            self.last_saved_path = self.file_manager.save(audio, filename=filename)
+
         return audio
 
     # Считаем громкость
@@ -72,6 +114,15 @@ class MicrophoneCapture:
         if x.size == 0:
             return 0.0
         return float(np.mean(np.abs(x) > float(threshold)))
+
+    def listen_and_save(self, duration: float = 5.0, filename: str | None = None) -> tuple[np.ndarray, Path]:
+        """Записывает и сразу сохраняет в WAV файл.
+        """
+
+        audio = self.listen(duration=duration, save=True, filename=filename)
+        if self.last_saved_path is None:
+            raise RuntimeError("Не удалось сохранить запись (неожиданное состояние).")
+        return audio, self.last_saved_path
 
 
 __all__ = ["MicrophoneCapture"]

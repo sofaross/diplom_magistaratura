@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.realtime.audio_capture import MicrophoneCapture
+from src.mictophone.audio_capture import MicrophoneCapture
 from src.preprocessing.audio_processing import AudioProcessor
 from src.models.emotion_recognizer import EmotionRecognizer
 from src.realtime.models_loader import EMOTION_RU, _resolve_repo_path
