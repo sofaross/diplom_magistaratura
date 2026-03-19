@@ -47,7 +47,7 @@ class MicrophoneCapture:
                 "Проверьте устройство ввода в системе."
             ) from e
 
-    def listen(self, duration: float = 5.0, *, save: bool | None = None, filename: str | None = None) -> np.ndarray:
+    def listen(self, duration: float = 5.0, *, save: bool | None = True, filename: str | None = None) -> np.ndarray:
         """Записывает звук с микрофона."""
 
         duration = float(duration)
@@ -116,8 +116,7 @@ class MicrophoneCapture:
         return float(np.mean(np.abs(x) > float(threshold)))
 
     def listen_and_save(self, duration: float = 5.0, filename: str | None = None) -> tuple[np.ndarray, Path]:
-        """Записывает и сразу сохраняет в WAV файл.
-        """
+        """Записывает и сразу сохраняет в WAV файл."""
 
         audio = self.listen(duration=duration, save=True, filename=filename)
         if self.last_saved_path is None:
