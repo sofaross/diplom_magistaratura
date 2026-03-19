@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
-from src.mictophone.audio_file_manager import AudioFileManager
+from src.audio_io.audio_file_manager import AudioFileManager
 
 save_path = Path(r"/notebooks/withoutNoise")
 
