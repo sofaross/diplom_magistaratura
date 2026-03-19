@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-"""Запись аудио с микрофона.
-"""
+"""Запись аудио с микрофона."""
 
 from pathlib import Path
 
