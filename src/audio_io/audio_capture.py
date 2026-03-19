@@ -14,16 +14,7 @@ save_path = Path(r"/notebooks/withoutNoise")
 class MicrophoneCapture:
     """Настройки записи."""
 
-    def __init__(
-        self,
-        sample_rate: int = 16000,
-        min_rms: float = 0.005,
-        max_clip_ratio: float = 0.01,
-        *,
-            file_manager=AudioFileManager(
-                save_dir=save_path,
-                sample_rate=16000
-            ),
+    def __init__(self,sample_rate: int = 16000,min_rms: float = 0.005,max_clip_ratio: float = 0.01,*,file_manager=AudioFileManager(save_dir=save_path,sample_rate=16000),
         auto_save: bool = True,
     ) -> None:
 
