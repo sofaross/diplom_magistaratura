@@ -1,0 +1,21 @@
+{
+  "source_type": "file",
+  "original_audio_path": "C:\\Users\\User\\PycharmProjects\\diplom_magistaratura\\data\\processed\\audio\\e2e_test_prepared.wav",
+  "processed_audio_path": "C:\\Users\\User\\PycharmProjects\\diplom_magistaratura\\data\\recording\\withNoise\\e2e_test_prepared_noise_rain_1_snr5_0.wav",
+  "sample_rate": 16000,
+  "duration_seconds": 1.0,
+  "noise_applied": true,
+  "noise_mode": "selected",
+  "noise_type": "rain_1",
+  "snr_db": 5.0,
+  "recognized_text": "",
+  "recognized_emotion": "fear",
+  "emotion_probabilities": {
+    "angry": 0.006492143496870995,
+    "disgust": 0.012784027494490147,
+    "fear": 0.6344978213310242,
+    "happy": 0.035702094435691833,
+    "neutral": 0.0358768105506897,
+    "sad": 0.2746471166610718
+  }
+}
