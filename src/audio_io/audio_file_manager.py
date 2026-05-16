@@ -12,9 +12,8 @@ from configs.config import ProjectConfig
 
 DEFAULT_AUDIO_CONFIG = ProjectConfig()
 
-
+"""Класс для работы с аудиофайлами: сохранение, загрузка, воспроизведение."""
 class AudioFileManager:
-    """Класс для работы с аудиофайлами: сохранение, загрузка, воспроизведение."""
 
     def __init__(
         self,

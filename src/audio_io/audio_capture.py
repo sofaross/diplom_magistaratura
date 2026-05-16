@@ -13,8 +13,8 @@ from src.audio_io.audio_file_manager import AudioFileManager
 DEFAULT_CAPTURE_CONFIG = ProjectConfig()
 DEFAULT_CAPTURE_DIR = Path(DEFAULT_CAPTURE_CONFIG.clean_recordings_dir)
 
+"""Настройки записи."""
 class MicrophoneCapture:
-    """Настройки записи."""
 
     def __init__(self,sample_rate: int = 16000,min_rms: float = 0.005,max_clip_ratio: float = 0.01,*,file_manager: AudioFileManager | None = None,
         auto_save: bool = True,

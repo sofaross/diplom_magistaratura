@@ -13,9 +13,13 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
+from configs.config import ProjectConfig
 from src.constants.emotions import CREMA_EMOTIONS, RAVDESS_EMOTIONS
 from src.features.feature_extraction import extract_mel_spectrogram
+from src.noise.noise_manager import NoiseManager
 from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
+
+DEFAULT_DATASET_CONFIG = ProjectConfig()
 
 
 # ===============================
@@ -234,6 +238,19 @@ class MelAugmentConfig:
     time_shift_max_frac: float = 0.10
 
 
+@dataclass(frozen=True)
+class WaveformNoiseAugmentConfig:
+    """Параметры шумовой аугментации в waveform-домене до построения mel."""
+
+    noise_prob: float = 0.5
+    noise_dir: Path = DEFAULT_DATASET_CONFIG.noise_dir
+    noise_types: tuple[str, ...] = ("white", "pink", "brown", "real")
+    snr_min: float = 5.0
+    snr_max: float = 20.0
+    sample_rate: int = DEFAULT_DATASET_CONFIG.sample_rate
+    random_seed: int | None = None
+
+
 def _standardize_mel(mel: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
     """Нормализация мел-спектрограммы по одному примеру (mean=0, std=1).
 
@@ -358,6 +375,8 @@ class EmotionDataset(Dataset):
         dataframe: pd.DataFrame,
         augment: bool = False,
         augment_config: Optional[MelAugmentConfig] = None,
+        waveform_noise_augment: bool = False,
+        waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
         max_frames: Optional[int] = None,
         cache_dir: Optional[Path] = None,
         use_cache: bool = True,
@@ -366,12 +385,20 @@ class EmotionDataset(Dataset):
         self.df = dataframe.reset_index(drop=True)
         self.augment = bool(augment)
         self.augment_config = augment_config or MelAugmentConfig()
+        self.waveform_noise_augment = bool(waveform_noise_augment)
+        self.waveform_noise_config = waveform_noise_config or WaveformNoiseAugmentConfig()
         self.max_frames = int(max_frames) if max_frames is not None else None
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
-        self.use_cache = bool(use_cache and self.cache_dir is not None)
+        self.use_cache = bool(use_cache and self.cache_dir is not None and not self.waveform_noise_augment)
+        self.noise_manager: NoiseManager | None = None
+        self.available_all_noise_types: list[str] = []
+        self.available_real_noise_types: list[str] = []
+        self.normalized_waveform_noise_types: tuple[str, ...] = ()
 
         if self.use_cache:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if self.waveform_noise_augment:
+            self._initialize_waveform_noise_augmentation()
 
     def __len__(self):
 
@@ -384,11 +411,16 @@ class EmotionDataset(Dataset):
         path = row["path"]
         label = row["label"]
 
-        mel = self._load_or_compute_mel(path)
+        if self.waveform_noise_augment:
+            audio = self._load_preprocessed_audio(path)
+            audio = self._apply_waveform_noise_augmentation(audio)
+            mel = self._compute_mel_from_audio(audio)
+        else:
+            mel = self._load_or_compute_mel(path)
+
         if self.augment:
             mel = self._augment_mel(mel)
         if self.max_frames is not None and int(mel.shape[-1]) > int(self.max_frames):
-            # Для train делаем random crop, для val/test - center crop.
             max_frames = int(self.max_frames)
             max_start = int(mel.shape[-1]) - max_frames
             start = random.randint(0, max_start) if self.augment else max_start // 2
@@ -397,6 +429,49 @@ class EmotionDataset(Dataset):
         label = torch.tensor(label, dtype=torch.long)
 
         return mel, label
+
+    def _initialize_waveform_noise_augmentation(self) -> None:
+        cfg = self.waveform_noise_config
+        if not 0.0 <= float(cfg.noise_prob) <= 1.0:
+            raise ValueError("waveform noise augmentation: noise_prob ?????? ???? ? ????????? [0, 1].")
+        if float(cfg.snr_min) > float(cfg.snr_max):
+            raise ValueError("waveform noise augmentation: snr_min ?? ?????? ???? ?????? snr_max.")
+
+        normalized_noise_types = tuple(str(name).strip().lower() for name in cfg.noise_types if str(name).strip())
+        if not normalized_noise_types:
+            raise ValueError("waveform noise augmentation: ?????? noise_types ????.")
+
+        self.noise_manager = NoiseManager(
+            noise_dir=Path(cfg.noise_dir),
+            sample_rate=int(cfg.sample_rate),
+            random_seed=cfg.random_seed,
+        )
+        self.available_all_noise_types = self.noise_manager.list_available_noises()
+        self.available_real_noise_types = [
+            noise_name
+            for noise_name in self.available_all_noise_types
+            if noise_name not in self.noise_manager.SYNTHETIC_NOISES
+        ]
+        self.normalized_waveform_noise_types = normalized_noise_types
+
+        available_variants = set(self.noise_manager.list_available_noise_variants())
+        for noise_name in self.normalized_waveform_noise_types:
+            if noise_name in {"white", "pink", "brown", "brownian", "real", "random"}:
+                continue
+            if noise_name in self.available_all_noise_types or noise_name in available_variants:
+                continue
+            raise ValueError(
+                f"waveform noise augmentation: ??????????? ??? ???? {noise_name!r}. "
+                f"????????? ????????: {', '.join(self.available_all_noise_types) or '???'}."
+            )
+
+        if "real" in self.normalized_waveform_noise_types and not self.available_real_noise_types:
+            raise ValueError(
+                f"waveform noise augmentation: ? ????? ????? ??? ???????? wav-??????: {cfg.noise_dir}"
+            )
+
+        if "random" in self.normalized_waveform_noise_types and not self.available_all_noise_types:
+            raise ValueError("waveform noise augmentation: ?? ??????? ?? ?????? ?????????? ????.")
 
     def _cache_path(self, audio_path: str) -> Optional[Path]:
         if not self.use_cache or self.cache_dir is None:
@@ -411,22 +486,11 @@ class EmotionDataset(Dataset):
             if isinstance(mel, dict) and "mel" in mel:
                 mel = mel["mel"]
             if not isinstance(mel, torch.Tensor):
-                raise ValueError(f"Некорректный формат кэша mel: {cache_path}")
+                raise ValueError(f"???????????? ?????? ???? mel: {cache_path}")
             return mel
 
-        # Считаем фичи один раз и (опционально) кэшируем.
-        audio = load_audio(audio_path)
-        audio = normalize_audio(audio)
-        audio = trim_silence(audio)
-
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.size == 0:
-            # Защита от полностью пустых клипов после trim_silence.
-            audio = np.zeros(160, dtype=np.float32)
-
-        mel_np = extract_mel_spectrogram(audio)  # [n_mels, T]
-        mel = torch.from_numpy(mel_np).unsqueeze(0).float()  # [1, n_mels, T]
-        mel = _standardize_mel(mel)
+        audio = self._load_preprocessed_audio(audio_path)
+        mel = self._compute_mel_from_audio(audio)
 
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -434,36 +498,83 @@ class EmotionDataset(Dataset):
 
         return mel
 
+    def _load_preprocessed_audio(self, audio_path: str) -> np.ndarray:
+        audio = load_audio(audio_path)
+        audio = normalize_audio(audio)
+        audio = trim_silence(audio)
+
+        prepared_audio = np.asarray(audio, dtype=np.float32)
+        if prepared_audio.size == 0:
+            return np.zeros(160, dtype=np.float32)
+        return prepared_audio
+
+    def _compute_mel_from_audio(self, audio: np.ndarray) -> torch.Tensor:
+        mel_np = extract_mel_spectrogram(np.asarray(audio, dtype=np.float32))
+        mel = torch.from_numpy(mel_np).unsqueeze(0).float()
+        return _standardize_mel(mel)
+
+    def _apply_waveform_noise_augmentation(self, audio: np.ndarray) -> np.ndarray:
+        if self.noise_manager is None:
+            raise RuntimeError("waveform noise augmentation ?? ????????????????.")
+
+        cfg = self.waveform_noise_config
+        clean_audio = np.asarray(audio, dtype=np.float32)
+        if random.random() >= float(cfg.noise_prob):
+            return clean_audio
+
+        selected_noise_name = self._sample_waveform_noise_name()
+        duration = float(clean_audio.shape[0]) / float(self.noise_manager.sample_rate)
+        snr_db = random.uniform(float(cfg.snr_min), float(cfg.snr_max))
+
+        if selected_noise_name in self.noise_manager.SYNTHETIC_NOISES or selected_noise_name == "brownian":
+            synthetic_name = "brown" if selected_noise_name == "brownian" else selected_noise_name
+            noise = self.noise_manager.generate_synthetic_noise(synthetic_name, duration)
+        else:
+            noise = self.noise_manager.get_real_noise(selected_noise_name, duration)
+
+        noisy_audio = self.noise_manager.add_noise(clean_audio, noise, snr_db=snr_db)
+        return normalize_audio(noisy_audio)
+
+    def _sample_waveform_noise_name(self) -> str:
+        if self.noise_manager is None:
+            raise RuntimeError("waveform noise augmentation ?? ????????????????.")
+
+        token = random.choice(self.normalized_waveform_noise_types)
+        if token == "random":
+            if not self.available_all_noise_types:
+                raise ValueError("??? ?????? random ?? ??????? ????????? ?????.")
+            return random.choice(self.available_all_noise_types)
+        if token == "real":
+            if not self.available_real_noise_types:
+                raise ValueError("??? ?????? real ?? ??????? ?? ?????? ????????? ????.")
+            return random.choice(self.available_real_noise_types)
+        return token
+
     def _augment_mel(self, mel: torch.Tensor) -> torch.Tensor:
-        """Аугментации для обучения (noise/time-stretch/pitch-shift + SpecAugment)."""
+        """??????????? ??? ???????? (noise/time-stretch/pitch-shift + SpecAugment)."""
 
         cfg = self.augment_config
         out = mel
 
-        # Шум
         if random.random() < cfg.noise_prob:
             std = random.uniform(cfg.noise_std_min, cfg.noise_std_max)
             if std > 0:
                 out = _mel_add_noise(out, std=std)
 
-        # Растяжение времени
         if random.random() < cfg.time_stretch_prob:
             factor = random.uniform(cfg.time_stretch_min, cfg.time_stretch_max)
             out = _mel_time_stretch(out, factor=factor)
 
-        # Pitch shift (mel bins)
         if random.random() < cfg.pitch_shift_prob and cfg.pitch_shift_bins > 0:
             shift = random.randint(-cfg.pitch_shift_bins, cfg.pitch_shift_bins)
             out = _mel_pitch_shift(out, shift_bins=shift)
 
-        # Сдвиг по времени
         if random.random() < cfg.time_shift_prob and float(cfg.time_shift_max_frac) > 0:
             max_shift = int(round(int(out.shape[-1]) * float(cfg.time_shift_max_frac)))
             if max_shift > 0:
                 shift = random.randint(-max_shift, max_shift)
                 out = _mel_time_shift(out, shift_frames=int(shift))
 
-        # SpecAugment: time/freq masking
         if random.random() < cfg.time_mask_prob:
             out = _mel_mask(out, axis=2, mask_param=cfg.time_mask_param)
         if random.random() < cfg.freq_mask_prob:
@@ -471,13 +582,6 @@ class EmotionDataset(Dataset):
 
         return out
 
-
-# ===============================
-# Мультимодальный набор данных (аудио + спектрограмма)
-# Улучшенная версия датасета, которая возвращает два представления звука:
-#     1. Сырой аудиосигнал (для обработки звуковыми моделями)
-#     2. Спектрограмму (для обработки как изображение)
-# ===============================
 
 class MultimodalDataset(Dataset):
 
@@ -631,6 +735,8 @@ def prepare_datasets(
     emotion_set: int = 8,
     augment: bool = False,
     augment_config: Optional[MelAugmentConfig] = None,
+    waveform_noise_augment: bool = False,
+    waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
     max_frames: Optional[int] = None,
     cache_dir: Optional[Path] = None,
 ):
@@ -647,6 +753,8 @@ def prepare_datasets(
             train_df,
             augment=augment,
             augment_config=augment_config,
+            waveform_noise_augment=waveform_noise_augment,
+            waveform_noise_config=waveform_noise_config,
             max_frames=max_frames,
             cache_dir=cache_dir,
         ),
@@ -654,6 +762,8 @@ def prepare_datasets(
             val_df,
             augment=False,
             augment_config=augment_config,
+            waveform_noise_augment=False,
+            waveform_noise_config=waveform_noise_config,
             max_frames=max_frames,
             cache_dir=cache_dir,
         ),
@@ -661,6 +771,8 @@ def prepare_datasets(
             test_df,
             augment=False,
             augment_config=augment_config,
+            waveform_noise_augment=False,
+            waveform_noise_config=waveform_noise_config,
             max_frames=max_frames,
             cache_dir=cache_dir,
         ),

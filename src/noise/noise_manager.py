@@ -13,7 +13,7 @@ DEFAULT_NOISE_CONFIG = ProjectConfig()
 
 
 class NoiseManager:
-    """Utility for synthetic and file-based noise handling."""
+    """Менеджер наложения синтетических и файловых шумов."""
 
     SYNTHETIC_NOISES: tuple[str, ...] = ("white", "pink", "brown")
 
@@ -62,14 +62,14 @@ class NoiseManager:
             self.real_noise_groups.setdefault(group_name, []).append(noise_name)
 
     def list_available_noises(self) -> list[str]:
-        """Return synthetic noises plus grouped real-noise categories."""
+        """Возвращает синтетические шумы и сгруппированные категории реальных шумов."""
 
         available = set(self.SYNTHETIC_NOISES)
         available.update(self.real_noise_groups.keys())
         return sorted(available)
 
     def list_available_noise_variants(self) -> list[str]:
-        """Return exact real-noise variants from the folder."""
+        """Возвращает точные имена файловых шумов, найденных в папке."""
 
         return sorted(self.real_noises.keys())
 

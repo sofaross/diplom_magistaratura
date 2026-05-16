@@ -11,7 +11,7 @@ from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
 
 
 class SpeechRecognitionService:
-    """Service layer over Wav2Vec2 ASR models."""
+    """Сервисный слой для распознавания речи на базе Wav2Vec2."""
 
     LANGUAGE_ALIASES: dict[str, str] = {
         "en": "en",

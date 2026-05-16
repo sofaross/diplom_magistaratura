@@ -12,7 +12,12 @@ from tqdm import tqdm
 
 from src.evaluation.evaluation import evaluate_emotion_model
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
-from src.utils.dataset_loader import MelAugmentConfig, create_dataloaders, prepare_datasets
+from src.utils.dataset_loader import (
+    MelAugmentConfig,
+    WaveformNoiseAugmentConfig,
+    create_dataloaders,
+    prepare_datasets,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -234,12 +239,19 @@ def main():
     parser.add_argument("--time-stretch-min", type=float, default=0.85)
     parser.add_argument("--time-stretch-max", type=float, default=1.20)
     parser.add_argument("--pitch-shift-bins", type=int, default=6)
+    parser.add_argument("--waveform-noise-augment", action="store_true")
+    parser.add_argument("--noise-prob", type=float, default=0.5)
+    parser.add_argument("--noise-dir", default="data/noise")
+    parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
+    parser.add_argument("--snr-min", type=float, default=5.0)
+    parser.add_argument("--snr-max", type=float, default=20.0)
     args = parser.parse_args()
 
     crema_path = _resolve_repo_path(args.crema_path)
     ravdess_path = _resolve_repo_path(args.ravdess_path)
     out_dir = _resolve_repo_path(args.out_dir)
     cache_dir = _resolve_repo_path(args.cache_dir)
+    noise_dir = _resolve_repo_path(args.noise_dir)
 
     try:
         aug_cfg = MelAugmentConfig(
@@ -248,12 +260,34 @@ def main():
             time_stretch_max=float(args.time_stretch_max),
             pitch_shift_bins=int(args.pitch_shift_bins),
         )
+        waveform_noise_cfg = None
+        if bool(args.waveform_noise_augment):
+            waveform_noise_cfg = WaveformNoiseAugmentConfig(
+                noise_prob=float(args.noise_prob),
+                noise_dir=noise_dir,
+                noise_types=tuple(str(name) for name in args.noise_types),
+                snr_min=float(args.snr_min),
+                snr_max=float(args.snr_max),
+            )
+            print("[эмоция] Включена waveform-level noise augmentation.")
+            print(
+                f"[эмоция] noise_prob={float(args.noise_prob):.2f} "
+                f"noise_types={', '.join(str(name) for name in args.noise_types)} "
+                f"snr=[{float(args.snr_min):g}, {float(args.snr_max):g}] dB "
+                f"noise_dir={noise_dir}"
+            )
+            print("[эмоция] Валидация и тест останутся без шумовой аугментации.")
+        else:
+            print("[эмоция] Waveform-level noise augmentation отключена.")
+
         train_ds, val_ds, test_ds, emotion_map = prepare_datasets(
             crema_path,
             ravdess_path,
             emotion_set=int(args.emotion_set),
             augment=bool(args.augment),
             augment_config=aug_cfg,
+            waveform_noise_augment=bool(args.waveform_noise_augment),
+            waveform_noise_config=waveform_noise_cfg,
             max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
             cache_dir=cache_dir,
         )
