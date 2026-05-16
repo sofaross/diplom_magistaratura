@@ -13,33 +13,9 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
+from src.constants.emotions import CREMA_EMOTIONS, RAVDESS_EMOTIONS
 from src.features.feature_extraction import extract_mel_spectrogram
 from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
-
-
-# ===============================
-# Эмоции
-# ===============================
-
-CREMA_EMOTIONS = {
-    "ANG": "angry",
-    "DIS": "disgust",
-    "FEA": "fear",
-    "HAP": "happy",
-    "NEU": "neutral",
-    "SAD": "sad"
-}
-
-RAVDESS_EMOTIONS = {
-    "01": "neutral",
-    "02": "calm",
-    "03": "happy",
-    "04": "sad",
-    "05": "angry",
-    "06": "fear",
-    "07": "disgust",
-    "08": "surprise"
-}
 
 
 # ===============================
@@ -71,10 +47,9 @@ def load_crema_d(dataset_path):
         data.append({
             "path": str(file),
             "emotion": emotion,
-            "dataset": "crema_d"
         })
 
-    df = pd.DataFrame(data, columns=["path", "emotion", "dataset"])
+    df = pd.DataFrame(data, columns=["path", "emotion"])
 
     return df
 
@@ -108,28 +83,11 @@ def load_ravdess(dataset_path):
         data.append({
             "path": str(file),
             "emotion": emotion,
-            "dataset": "ravdess"
         })
 
-    df = pd.DataFrame(data, columns=["path", "emotion", "dataset"])
+    df = pd.DataFrame(data, columns=["path", "emotion"])
 
     return df
-
-
-# ===============================
-# Объединение датасетов
-# ===============================
-
-def load_emotion_datasets(crema_path, ravdess_path):
-
-    crema_df = load_crema_d(crema_path)
-
-    ravdess_df = load_ravdess(ravdess_path)
-
-    dataset = pd.concat([crema_df, ravdess_df], ignore_index=True)
-
-    return dataset
-
 
 # ===============================
 # Кодирование эмоций
@@ -146,7 +104,7 @@ def encode_labels(df, emotion_to_id=None):
     if len(df) == 0:
         raise ValueError(
             "encode_labels: датасет пустой (0 примеров). "
-            "Проверьте пути к CREMA-D и RAVDESS и наличие .wav файлов."
+            "Проверьте пути к датасетам и наличие .wav файлов."
         )
 
     if emotion_to_id is None:
@@ -192,12 +150,10 @@ def split_dataset(df):
 # Подготовка датасета
 # ===============================
 
-def prepare_splits(
-    crema_path,
-    ravdess_path,
+def prepare_splits(crema_path, ravdess_path,
     emotion_map=None,
     verbose=True,
-    emotion_set: int = 8,
+    emotion_set: int = 6,
 ):
 
     if verbose:

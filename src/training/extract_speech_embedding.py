@@ -26,8 +26,9 @@ if __name__ == "__main__" and __package__ is None:
     # но при этом импортировать `src.*` как пакет.
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.models.speech_model import Wav2Vec2Multimodal
-from src.utils.audio_utils import load_audio_for_models
+from src.inference.wav2vec2_inference import transcribe_and_embed
+from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
+from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -82,13 +83,18 @@ def main() -> None:
     print(f"[speech-emb] device: {args.device}")
 
     try:
-        audio = load_audio_for_models(audio_path, sample_rate=16000)
+        audio = load_audio(audio_path, sample_rate=16000)
+        audio = normalize_audio(audio)
+        audio = trim_silence(audio)
     except Exception as e:
         raise SystemExit(f"Не удалось прочитать/предобработать аудио: {e}")
 
     try:
-        model = Wav2Vec2Multimodal(model_name=args.model_name, device=args.device, strict=True)
-        text, embedding = model.transcribe_and_embed(audio)
+        wrapper = Wav2Vec2Wrapper.from_pretrained(
+            model_name=args.model_name,
+            device=args.device,
+        )
+        text, embedding = transcribe_and_embed(wrapper, audio)
     except Exception as e:
         raise SystemExit(
             "Не удалось загрузить Wav2Vec2 или извлечь эмбеддинг. "

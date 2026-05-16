@@ -11,20 +11,10 @@ from pathlib import Path
 
 import torch
 
+from src.constants.emotions import EMOTION_RU
+
 # Корень репозитория (нужно для удобной работы с относительными путями из CLI).
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# Перевод эмоций (если в emotion_map используются английские названия).
-EMOTION_RU: dict[str, str] = {
-    "neutral": "нейтрально",
-    "happy": "радость",
-    "sad": "грусть",
-    "angry": "злость",
-    "fear": "страх",
-    "disgust": "отвращение",
-    "calm": "спокойствие",
-    "surprise": "удивление",
-}
 
 
 def _resolve_repo_path(value: str | Path) -> Path:
@@ -129,4 +119,3 @@ __all__ = [
     "_load_state_dict",
     "_resolve_repo_path",
 ]
-

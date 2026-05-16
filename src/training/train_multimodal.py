@@ -17,9 +17,10 @@ import torch.optim as optim
 from tqdm import tqdm
 
 from src.evaluation.evaluation import evaluate_fusion_model
-from src.models.emotion_model import EmotionModel
+from src.inference.wav2vec2_inference import extract_embedding
+from src.models.emotion_model import EmotionModel, EmotionModelImproved
 from src.models.multimodal_model import FusionModel
-from src.models.speech_model import Wav2Vec2Multimodal
+from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
 from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
 
 
@@ -48,9 +49,38 @@ def _load_state_dict(checkpoint_path: Path):
     raise ValueError(f"Unsupported checkpoint format: {checkpoint_path}")
 
 
+def _infer_emotion_set(emotion_map: dict[str, int]) -> int:
+    num_classes = len(emotion_map)
+    if num_classes not in {6, 8}:
+        raise ValueError(
+            f"Unsupported emotion map size: {num_classes}. Expected 6 or 8 classes."
+        )
+    return num_classes
+
+
+def _load_emotion_model(checkpoint_path: Path, num_emotions: int, device: torch.device) -> torch.nn.Module:
+    state = _load_state_dict(checkpoint_path)
+
+    errors: list[str] = []
+    for model_cls in (EmotionModelImproved, EmotionModel):
+        try:
+            model = model_cls(num_emotions=num_emotions)
+            model.load_state_dict(state, strict=True)
+            model.to(device)
+            model.eval()
+            return model
+        except Exception as exc:
+            errors.append(f"{model_cls.__name__}: {exc}")
+
+    raise RuntimeError(
+        "Failed to load emotion checkpoint into a supported architecture.\n"
+        + "\n".join(errors)
+    )
+
+
 def train_fusion_model(
     fusion_model,
-    speech_model,
+    speech_wrapper,
     emotion_model,
     train_loader,
     val_loader,
@@ -75,15 +105,26 @@ def train_fusion_model(
         running_loss = 0.0
         num_samples = 0
 
-        for audios, mels, labels in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False):
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False):
+            if len(batch) == 3:
+                audios, mels, labels = batch
+                lengths = None
+            else:
+                audios, mels, lengths, labels = batch
+
             mels = mels.to(device)
             labels = labels.to(device)
+            lengths = lengths.to(device) if lengths is not None else None
 
             with torch.inference_mode():
-                speech_emb = speech_model.extract_embedding(audios)
+                speech_emb = extract_embedding(
+                    speech_wrapper,
+                    audios,
+                    preprocess=False,
+                )
                 speech_emb = speech_emb.to(device)
 
-                emotion_emb = emotion_model.extract_embedding(mels)
+                emotion_emb = emotion_model.extract_embedding(mels, lengths=lengths)
                 emotion_emb = emotion_emb.to(device)
 
             optimizer.zero_grad(set_to_none=True)
@@ -101,10 +142,11 @@ def train_fusion_model(
         train_loss = running_loss / max(1, num_samples)
         val_metrics = evaluate_fusion_model(
             fusion_model,
-            speech_model,
+            speech_wrapper,
             emotion_model,
             val_loader,
             device=device,
+            speech_preprocess=False,
         )
         val_acc = float(val_metrics["accuracy"])
 
@@ -164,6 +206,7 @@ def main():
     out_dir = _resolve_repo_path(args.out_dir)
 
     emotion_map = _load_emotion_map(emotion_map_json_path)
+    emotion_set = _infer_emotion_set(emotion_map)
 
     try:
         train_df, val_df, test_df, _ = prepare_splits(
@@ -171,6 +214,7 @@ def main():
             ravdess_path,
             emotion_map=emotion_map,
             verbose=True,
+            emotion_set=emotion_set,
         )
     except ValueError as e:
         raise SystemExit(str(e))
@@ -185,26 +229,26 @@ def main():
         test_ds,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        with_lengths=True,
     )
 
     device = torch.device(args.device)
 
     # Аудио в MultimodalDataset уже нормализовано и обрезано (trim_silence),
     # поэтому здесь можно отключить дополнительную предобработку.
-    speech_model = Wav2Vec2Multimodal(
+    speech_wrapper = Wav2Vec2Wrapper.from_pretrained(
         model_name=args.speech_model_name,
         device=device,
-        preprocess=False,
-        strict=True,
     )
 
-    emotion_model = EmotionModel(num_emotions=len(emotion_map))
-    emotion_model.load_state_dict(_load_state_dict(emotion_checkpoint_path))
-    emotion_model.to(device)
-    emotion_model.eval()
+    emotion_model = _load_emotion_model(
+        emotion_checkpoint_path,
+        num_emotions=len(emotion_map),
+        device=device,
+    )
 
     fusion_model = FusionModel(
-        speech_dim=speech_model.embedding_dim,
+        speech_dim=speech_wrapper.hidden_size,
         emotion_dim=128,
         num_classes=len(emotion_map),
     )
@@ -213,7 +257,7 @@ def main():
 
     fusion_model = train_fusion_model(
         fusion_model,
-        speech_model,
+        speech_wrapper,
         emotion_model,
         train_loader,
         val_loader,
@@ -225,10 +269,11 @@ def main():
 
     test_metrics = evaluate_fusion_model(
         fusion_model,
-        speech_model,
+        speech_wrapper,
         emotion_model,
         test_loader,
         device=device,
+        speech_preprocess=False,
     )
     print(
         f"[fusion] test_acc={test_metrics['accuracy']:.4f} "

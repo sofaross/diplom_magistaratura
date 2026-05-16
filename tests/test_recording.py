@@ -8,12 +8,12 @@ import sys
 import time
 
 # Добавляем корень проекта в путь
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.mictophone.audio_capture import MicrophoneCapture
-from src.mictophone.audio_file_manager import AudioFileManager
+from src.audio_io.audio_capture import MicrophoneCapture
+from src.audio_io.audio_file_manager import AudioFileManager
 
 
 def simple_recording_test():
@@ -24,7 +24,7 @@ def simple_recording_test():
     print("=" * 60)
 
     # Папка для сохранения (твоя папка withoutNoise)
-    save_path = Path(r"C:\Users\User\PycharmProjects\diplom_magistaratura\notebooks\withoutNoise")
+    save_path = REPO_ROOT / "data" / "recording" / "withoutNoise"
 
     # Создаём менеджер файлов
     manager = AudioFileManager(

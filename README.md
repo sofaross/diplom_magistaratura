@@ -10,7 +10,10 @@ pip install -r requirements.txt
 - распознавание текста (ASR, CTC)
 - извлечение **speech embeddings** из скрытых слоёв (для мультимодальности)
 
-Код: `src/models/wav2vec2_multimodal.py` (`Wav2Vec2Multimodal`)
+Код:
+- `src/models/wav2vec2_wrapper.py` (`Wav2Vec2Wrapper`) — только загрузка и хранение модели
+- `src/inference/wav2vec2_inference.py` — чистые функции инференса (`transcribe`, `extract_embedding`, `transcribe_and_embed`)
+- `src/models/speech_model.py` (`Wav2Vec2Multimodal`) — совместимый фасад для старого API
 
 Пример модели для русского:
 - `jonatasgrosman/wav2vec2-large-xlsr-53-russian`
@@ -53,7 +56,7 @@ train_loader, val_loader, test_loader = create_dataloaders(train_ds, val_ds, tes
 Smoke-check (быстрая проверка импорта/форм):
 
 ```bash
-python -m src --smoke
+python main.py --smoke
 ```
 
 ## Обучение

@@ -1,6 +1,7 @@
 import torch
 
 from src.evaluation.metrics import compute_classification_metrics
+from src.inference.wav2vec2_inference import extract_embedding
 
 # ===============================
 # проверка модели эмоций
@@ -40,7 +41,17 @@ def evaluate_emotion_model(model, dataloader, device="cpu"):
 # проверка мультимодальной модели
 # ===============================
 @torch.inference_mode()
-def evaluate_fusion_model(fusion_model, speech_model, emotion_model, dataloader, device="cpu"):
+def evaluate_fusion_model(
+    fusion_model,
+    speech_wrapper,
+    emotion_model,
+    dataloader,
+    device="cpu",
+    *,
+    speech_preprocess: bool = False,
+    speech_layer: int = -1,
+    speech_pool: str = "mean",
+):
     fusion_model.eval()
     emotion_model.eval()
 
@@ -61,7 +72,13 @@ def evaluate_fusion_model(fusion_model, speech_model, emotion_model, dataloader,
         labels = labels.to(device)
         lengths = lengths.to(device) if lengths is not None else None
 
-        speech_emb = speech_model.extract_embedding(audios)
+        speech_emb = extract_embedding(
+            speech_wrapper,
+            audios,
+            layer=speech_layer,
+            pool=speech_pool,
+            preprocess=speech_preprocess,
+        ).to(device)
         emotion_emb = emotion_model.extract_embedding(mels, lengths=lengths)
 
         logits = fusion_model(speech_emb, emotion_emb)

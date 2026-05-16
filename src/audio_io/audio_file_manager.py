@@ -7,12 +7,20 @@ import soundfile as sf
 import sounddevice as sd
 import librosa
 import numpy as np
+from configs.config import ProjectConfig
 """Работа с аудиофайлами: сохранение, загрузка, воспроизведение."""
+
+DEFAULT_AUDIO_CONFIG = ProjectConfig()
+
 
 class AudioFileManager:
     """Класс для работы с аудиофайлами: сохранение, загрузка, воспроизведение."""
 
-    def __init__(self, save_dir: str | Path = "data/recordings/withoutNoise", sample_rate: int = 16000):
+    def __init__(
+        self,
+        save_dir: str | Path = DEFAULT_AUDIO_CONFIG.clean_recordings_dir,
+        sample_rate: int = DEFAULT_AUDIO_CONFIG.sample_rate,
+    ):
         """Инициализация менеджера аудиофайлов."""
 
         self.save_dir = Path(save_dir)
@@ -165,4 +173,3 @@ class AudioFileInfo:
     subtype: str | None = None
 
 __all__ = ["AudioFileManager", "AudioFileInfo"]
-

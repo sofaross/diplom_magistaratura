@@ -6,7 +6,7 @@ from __future__ import annotations
 - запись с микрофона (MicrophoneCapture)
 - предобработка аудио (AudioProcessor)
 - распознавание эмоций (EmotionRecognizer)
-- распознавание речи (Wav2Vec2Multimodal)
+- распознавание речи (Wav2Vec2Wrapper + transcribe)
 """
 
 import argparse
@@ -21,11 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.mictophone.audio_capture import MicrophoneCapture
-from src.preprocessing.audio_processing import AudioProcessor
+from src.constants.emotions import EMOTION_RU
 from src.models.emotion_recognizer import EmotionRecognizer
-from src.realtime.models_loader import EMOTION_RU, _resolve_repo_path
-from src.models.speech_model import Wav2Vec2Multimodal
+from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
+from src.audio_io.audio_capture import MicrophoneCapture
+from src.inference.wav2vec2_inference import transcribe
+from src.preprocessing.audio_processing import AudioProcessor
+from src.realtime.models_loader import _resolve_repo_path
 
 
 class RealtimeSpeechEmotionRecognizer:
@@ -80,15 +82,18 @@ class RealtimeSpeechEmotionRecognizer:
             audio_processor=self.audio_processor,
         )
 
-        # Распознавание речи (ASR) через Wav2Vec2 CTC: может не загрузиться (например, без интернета),
-        # поэтому strict=False: объект создаётся, а ошибка хранится в self.speech.load_error.
-        self.speech = Wav2Vec2Multimodal(
-            model_name=speech_model_name,
-            device=self.device,
-            sample_rate=self.sample_rate,
-            preprocess=True,
-            strict=False,
-        )
+        # Speech-модель необязательна: если загрузка не удалась, эмоции всё равно можно распознавать.
+        self.speech: Wav2Vec2Wrapper | None = None
+        self.speech_load_error: str | None = None
+        try:
+            self.speech = Wav2Vec2Wrapper.from_pretrained(
+                model_name=speech_model_name,
+                device=self.device,
+                sample_rate=self.sample_rate,
+            )
+        except Exception as e:
+            self.speech = None
+            self.speech_load_error = str(e)
 
     def listen(self, duration: float = 5.0) -> np.ndarray:
         """Записывает аудио с микрофона.
@@ -115,7 +120,11 @@ class RealtimeSpeechEmotionRecognizer:
             RuntimeError: если ASR модель не загружена или произошла ошибка распознавания.
         """
 
-        return self.speech.recognize(audio)
+        if self.speech is None:
+            raise RuntimeError(self.speech_load_error or "Wav2Vec2 модель не загружена.")
+
+        text = transcribe(self.speech, audio, preprocess=True)
+        return text if isinstance(text, str) else text[0]
 
     def recognize_emotion(self, audio: np.ndarray) -> tuple[str, dict[str, float]]:
         """Распознаёт эмоцию из аудио.

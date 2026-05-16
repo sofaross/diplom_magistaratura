@@ -7,14 +7,16 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
+from configs.config import ProjectConfig
 from src.audio_io.audio_file_manager import AudioFileManager
 
-save_path = Path(r"/notebooks/withoutNoise")
+DEFAULT_CAPTURE_CONFIG = ProjectConfig()
+DEFAULT_CAPTURE_DIR = Path(DEFAULT_CAPTURE_CONFIG.clean_recordings_dir)
 
 class MicrophoneCapture:
     """Настройки записи."""
 
-    def __init__(self,sample_rate: int = 16000,min_rms: float = 0.005,max_clip_ratio: float = 0.01,*,file_manager=AudioFileManager(save_dir=save_path,sample_rate=16000),
+    def __init__(self,sample_rate: int = 16000,min_rms: float = 0.005,max_clip_ratio: float = 0.01,*,file_manager: AudioFileManager | None = None,
         auto_save: bool = True,
     ) -> None:
 
@@ -22,7 +24,10 @@ class MicrophoneCapture:
         self.min_rms = float(min_rms)
         self.max_clip_ratio = float(max_clip_ratio)
 
-        self.file_manager = file_manager
+        self.file_manager = file_manager or AudioFileManager(
+            save_dir=DEFAULT_CAPTURE_DIR,
+            sample_rate=self.sample_rate,
+        )
         self.auto_save = bool(auto_save)
         self.last_saved_path: Path | None = None
 
@@ -37,7 +42,7 @@ class MicrophoneCapture:
                 "Проверьте устройство ввода в системе."
             ) from e
 
-    def listen(self, duration: float = 5.0, *, save: bool | None = True, filename: str | None = None) -> np.ndarray:
+    def listen(self, duration: float = 5.0, *, save: bool | None = None, filename: str | None = None) -> np.ndarray:
         """Записывает звук с микрофона."""
 
         duration = float(duration)
