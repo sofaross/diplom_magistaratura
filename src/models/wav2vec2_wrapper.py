@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -36,6 +37,7 @@ class Wav2Vec2Wrapper:
             if device is not None
             else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
+        cls._raise_if_incomplete_cache_detected(model_name)
 
         try:
             processor = cls._load_processor(model_name)
@@ -66,6 +68,22 @@ class Wav2Vec2Wrapper:
             if "pyctcdecode" not in error_text:
                 raise
             return Wav2Vec2Processor.from_pretrained(model_name)
+
+    @staticmethod
+    def _raise_if_incomplete_cache_detected(model_name: str) -> None:
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / ("models--" + model_name.replace("/", "--"))
+        if not cache_dir.exists():
+            return
+
+        incomplete_files = sorted(path for path in cache_dir.rglob("*.incomplete") if path.is_file())
+        if not incomplete_files:
+            return
+
+        details = ", ".join(f"{path.name} ({path.stat().st_size / 1024 / 1024:.1f} MB)" for path in incomplete_files)
+        raise RuntimeError(
+            f"Для модели {model_name!r} найден недокачанный кэш Hugging Face: {details}. "
+            f"Удалите каталог {cache_dir} и запустите загрузку заново."
+        )
 
     @property
     def hidden_size(self) -> int:

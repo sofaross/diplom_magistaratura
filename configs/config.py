@@ -26,6 +26,8 @@ class ProjectConfig:
     default_speech_language: str = "en"
     speech_model_name_en: str = "jonatasgrosman/wav2vec2-large-xlsr-53-english"
     speech_model_name_ru: str = "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
+    text_correction_model_name_en: str = "dayyanj/dj-ai-asr-grammar-corrector-small"
+    text_correction_model_name_ru: str = "ai-forever/sage-fredt5-distilled-95m"
     models_dir: Path = REPO_ROOT / "data" / "processed" / "models"
     emotion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion"
     fusion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "fusion"

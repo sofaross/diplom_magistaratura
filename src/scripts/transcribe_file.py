@@ -12,7 +12,7 @@ DEFAULT_RECORDINGS_DIR = Path(ProjectConfig().clean_recordings_dir)
 
 """
    Загружает аудиофайл и возвращает распознанный текст.
-   Если file_path не указан, берётся самый свежий .wav файл из папки recordings_dir.
+   Если file_path не указан, берётся самый свежий поддерживаемый аудиофайл из папки recordings_dir.
    При ошибках возвращает пустую строку и печатает сообщение.
    """
 
@@ -23,13 +23,16 @@ def transcribe_file(
     device: str | None = None,
     recordings_dir: Path = DEFAULT_RECORDINGS_DIR,
 ) -> str:
+    manager = AudioFileManager(sample_rate=16000)
+
     if file_path is None:
         try:
-            wav_files = list(recordings_dir.glob("*.wav"))
-            if not wav_files:
-                print("В папке нет .wav файлов.")
+            audio_files = manager.list_audio_files(recordings_dir, recursive=False)
+            if not audio_files:
+                supported = ", ".join(manager.SUPPORTED_INPUT_EXTENSIONS)
+                print(f"В папке нет поддерживаемых аудиофайлов ({supported}).")
                 return ""
-            latest_file = max(wav_files, key=lambda path: path.stat().st_mtime)
+            latest_file = max(audio_files, key=lambda path: path.stat().st_mtime)
             file_path = latest_file
             print(f"Использую последнюю запись: {file_path.name}")
         except Exception as e:
@@ -37,9 +40,12 @@ def transcribe_file(
             return ""
     else:
         file_path = Path(file_path)
+        if not manager.is_supported_audio_file(file_path):
+            supported = ", ".join(manager.SUPPORTED_INPUT_EXTENSIONS)
+            print(f"Неподдерживаемый формат файла {file_path}. Допустимые расширения: {supported}")
+            return ""
 
     try:
-        manager = AudioFileManager(sample_rate=16000)
         audio = manager.load(file_path, target_sample_rate=16000)
     except Exception as e:
         print(f"Не удалось загрузить файл {file_path}: {e}")

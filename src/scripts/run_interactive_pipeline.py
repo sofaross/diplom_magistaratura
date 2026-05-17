@@ -198,7 +198,7 @@ class InteractivePipelineRunner:
     def _choose_recording_from_list(self, recordings: list[Path], *, title: str) -> Path:
         print(f"\n{title}")
         for index, path in enumerate(recordings, start=1):
-            print(f"{index} - {path.name}")
+            print(f"{index} - {self._describe_audio_file(path)}")
 
         while True:
             raw_value = input("Выберите запись по номеру: ").strip()
@@ -214,13 +214,26 @@ class InteractivePipelineRunner:
 
     @staticmethod
     def _list_recordings(directory: Path) -> list[Path]:
-        if not directory.exists():
-            return []
-        return sorted(
-            (path.resolve() for path in directory.rglob("*.wav") if path.is_file()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        return AudioFileManager.list_audio_files(directory, recursive=True)
+
+    def _describe_audio_file(self, path: Path) -> str:
+        try:
+            info = self.clean_audio_manager.get_info(path)
+            suffix = path.suffix.lower().lstrip(".") or "audio"
+            duration = self._format_duration(float(info.get("duration", 0.0) or 0.0))
+            return f"{path.name} [{suffix}, {duration}]"
+        except Exception:
+            return path.name
+
+    @staticmethod
+    def _format_duration(duration_seconds: float) -> str:
+        total_seconds = max(0.0, float(duration_seconds))
+        if total_seconds < 60.0:
+            return f"{total_seconds:.1f} c"
+
+        minutes = int(total_seconds // 60)
+        seconds = total_seconds - minutes * 60
+        return f"{minutes} мин {seconds:.1f} c"
 
     def _ask_existing_audio_path(self) -> Path:
         while True:
@@ -235,6 +248,10 @@ class InteractivePipelineRunner:
                 continue
             if not path.is_file():
                 print(f"Это не файл: {path}")
+                continue
+            if not self.clean_audio_manager.is_supported_audio_file(path):
+                supported = ", ".join(self.clean_audio_manager.SUPPORTED_INPUT_EXTENSIONS)
+                print(f"Поддерживаются только аудиофайлы: {supported}")
                 continue
             return path
 
@@ -356,6 +373,7 @@ class InteractivePipelineRunner:
         print(f"Тип шума: {noise_type or '-'}")
         print(f"SNR: {snr_db if snr_db is not None else '-'}")
         print(f"Распознанный текст: {result.recognized_text or '-'}")
+        print(f"Скорее всего текст: {result.suggested_text or result.recognized_text or '-'}")
         print(f"Распознанная эмоция: {result.predicted_emotion or '-'}")
         print("Вероятности по эмоциям:")
         if result.emotion_probabilities:

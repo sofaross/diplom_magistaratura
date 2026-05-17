@@ -14,6 +14,7 @@ DEFAULT_AUDIO_CONFIG = ProjectConfig()
 
 """Класс для работы с аудиофайлами: сохранение, загрузка, воспроизведение."""
 class AudioFileManager:
+    SUPPORTED_INPUT_EXTENSIONS: tuple[str, ...] = (".wav", ".ogg")
 
     def __init__(
         self,
@@ -135,6 +136,28 @@ class AudioFileManager:
             return "recording.wav"
 
         return name
+
+    @classmethod
+    def is_supported_audio_file(cls, filepath: str | Path) -> bool:
+        """Проверяет, что расширение файла поддерживается для чтения."""
+
+        return Path(filepath).suffix.lower() in cls.SUPPORTED_INPUT_EXTENSIONS
+
+    @classmethod
+    def list_audio_files(cls, directory: str | Path, *, recursive: bool = True) -> list[Path]:
+        """Возвращает список поддерживаемых аудиофайлов из каталога."""
+
+        root = Path(directory)
+        if not root.exists():
+            return []
+
+        iterator = root.rglob("*") if recursive else root.glob("*")
+        audio_files = [
+            path.resolve()
+            for path in iterator
+            if path.is_file() and cls.is_supported_audio_file(path)
+        ]
+        return sorted(audio_files, key=lambda path: path.stat().st_mtime, reverse=True)
 
     def get_info(self, filepath: str | Path) -> dict:
         """Возвращает информацию об аудиофайле."""

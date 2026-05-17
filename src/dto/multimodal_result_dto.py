@@ -30,6 +30,7 @@ class ResultDto:
     noise_variant: str | None
     snr_db: float | None
     recognized_text: str
+    suggested_text: str
     recognized_emotion: str
     emotion_probabilities: dict[str, float]
 

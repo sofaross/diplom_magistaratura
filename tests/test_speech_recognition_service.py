@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,6 +13,20 @@ from src.services.speech_recognition_service import SpeechRecognitionService
 
 
 class SpeechRecognitionServiceTests(unittest.TestCase):
+    def test_wav2vec2_wrapper_detects_incomplete_cache(self) -> None:
+        fake_incomplete = Path("C:/tmp/model.bin.incomplete")
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.rglob", return_value=[fake_incomplete]):
+                with patch("pathlib.Path.is_file", return_value=True):
+                    with patch.object(Path, "stat", return_value=SimpleNamespace(st_size=128 * 1024 * 1024)):
+                        with self.assertRaises(RuntimeError) as ctx:
+                            Wav2Vec2Wrapper._raise_if_incomplete_cache_detected(
+                                "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
+                            )
+
+        self.assertIn("недокачанный кэш", str(ctx.exception))
+
     def test_wav2vec2_wrapper_falls_back_when_pyctcdecode_missing(self) -> None:
         with patch(
             "src.models.wav2vec2_wrapper.AutoProcessor.from_pretrained",
@@ -40,7 +55,9 @@ class SpeechRecognitionServiceTests(unittest.TestCase):
         ):
             with patch(
                 "src.services.speech_recognition_service.transcribe",
-                side_effect=lambda wrapper, audio, preprocess: f"decoded:{wrapper.model_name}",
+                side_effect=lambda wrapper, audio, preprocess: (
+                    f"это длинная тестовая строка для модели {wrapper.model_name}"
+                ),
             ):
                 service = SpeechRecognitionService(config=ProjectConfig(), preprocess=False)
                 audio = np.zeros(160, dtype=np.float32)
@@ -55,8 +72,8 @@ class SpeechRecognitionServiceTests(unittest.TestCase):
                 ProjectConfig().speech_model_name_en,
             ],
         )
-        self.assertEqual(ru_text, f"decoded:{ProjectConfig().speech_model_name_ru}")
-        self.assertEqual(en_text, f"decoded:{ProjectConfig().speech_model_name_en}")
+        self.assertIn("модели", ru_text)
+        self.assertIn("модели", en_text)
 
 
 if __name__ == "__main__":

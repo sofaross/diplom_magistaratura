@@ -7,6 +7,7 @@ from src.services.audio_input_service import AudioInputService
 from src.services.emotion_recognition_service import EmotionRecognitionService
 from src.services.noise_service import NoiseService
 from src.services.speech_recognition_service import SpeechRecognitionService
+from src.services.text_correction_service import TextCorrectionService
 
 
 class MultimodalClassificationService:
@@ -19,11 +20,13 @@ class MultimodalClassificationService:
         noise_service: NoiseService | None = None,
         speech_recognition_service: SpeechRecognitionService | None = None,
         emotion_recognition_service: EmotionRecognitionService | None = None,
+        text_correction_service: TextCorrectionService | None = None,
     ) -> None:
         self.audio_input_service = audio_input_service or AudioInputService()
         self.noise_service = noise_service or NoiseService()
         self.speech_recognition_service = speech_recognition_service or SpeechRecognitionService()
         self.emotion_recognition_service = emotion_recognition_service or EmotionRecognitionService()
+        self.text_correction_service = text_correction_service or TextCorrectionService()
 
     def process_audio_file(
         self,
@@ -103,6 +106,7 @@ class MultimodalClassificationService:
             raise ValueError("noise_mode must be one of: 'none', 'random', 'selected'.")
 
         text = self.speech_recognition_service.recognize(payload.audio, language=speech_language)
+        suggested_text = self.text_correction_service.suggest(text, language=speech_language)
         emotion, probabilities = self.emotion_recognition_service.recognize(payload.audio)
 
         processed_path = payload.prepared_file_path or payload.original_file_path
@@ -118,6 +122,7 @@ class MultimodalClassificationService:
             noise_variant=noise_metadata["noise_variant"],
             snr_db=noise_metadata["snr_db"],
             recognized_text=text,
+            suggested_text=suggested_text,
             recognized_emotion=emotion,
             emotion_probabilities=probabilities,
         )

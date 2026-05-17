@@ -14,6 +14,7 @@ from src.models.emotion_recognizer import EmotionRecognizer
 from src.models.speech_model import Wav2Vec2Multimodal
 from src.noise.noise_manager import NoiseManager
 from src.preprocessing.audio_processing import normalize_audio, trim_silence
+from src.services.text_correction_service import TextCorrectionService
 
 
 @dataclass(slots=True)
@@ -25,6 +26,7 @@ class ProcessingResult:
     noise_type: str | None = None
     snr_db: float | None = None
     recognized_text: str = ""
+    suggested_text: str = ""
     predicted_emotion: str = ""
     emotion_probabilities: dict[str, float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
@@ -61,6 +63,7 @@ class MultimodalPipeline:
         default_speech_language: str | None = None,
         emotion_model_path: str | Path | None = None,
         emotion_map_path: str | Path | None = None,
+        text_correction_service: TextCorrectionService | None = None,
         device: str | torch.device | None = None,
     ) -> None:
         self.config = config or ProjectConfig()
@@ -93,6 +96,7 @@ class MultimodalPipeline:
             default_speech_language or self.config.default_speech_language
         )
         self._speech_recognizers = dict(speech_recognizers or {})
+        self._text_correction_service = text_correction_service
 
     def list_available_noises(self) -> list[str]:
         """Возвращает список доступных типов шумов."""
@@ -172,9 +176,12 @@ class MultimodalPipeline:
         result.snr_db = effective_snr_db
 
         try:
-            recognizer = self._get_speech_recognizer(speech_language=speech_language)
+            resolved_language = self._normalize_language(speech_language or self.default_speech_language)
+            recognizer = self._get_speech_recognizer(speech_language=resolved_language)
             recognized_text = recognizer.transcribe(processed_audio)
-            result.recognized_text = recognized_text if isinstance(recognized_text, str) else recognized_text[0]
+            raw_text = recognized_text if isinstance(recognized_text, str) else recognized_text[0]
+            result.recognized_text = str(raw_text or "").strip()
+            result.suggested_text = self._suggest_text(result.recognized_text, language=resolved_language)
         except Exception as exc:
             result.errors.append(f"Ошибка распознавания речи: {exc}")
 
@@ -279,6 +286,20 @@ class MultimodalPipeline:
                 device=self.device,
             )
         return self._emotion_recognizer
+
+    def _get_text_correction_service(self) -> TextCorrectionService:
+        if self._text_correction_service is None:
+            self._text_correction_service = TextCorrectionService(
+                config=self.config,
+                default_language=self.default_speech_language,
+                device=self.device,
+            )
+        return self._text_correction_service
+
+    def _suggest_text(self, text: str, *, language: str) -> str:
+        if not str(text or "").strip():
+            return ""
+        return self._get_text_correction_service().suggest(text, language=language)
 
     def _get_speech_recognizer(self, *, speech_language: str | None = None) -> Wav2Vec2Multimodal:
         if self._speech_recognizer is not None:
