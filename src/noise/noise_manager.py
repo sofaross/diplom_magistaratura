@@ -49,6 +49,8 @@ class NoiseManager:
 
                 if audio.size == 0:
                     raise ValueError("Noise file is empty.")
+                if not np.isfinite(self._power(audio)) or self._power(audio) <= 0.0:
+                    raise ValueError("Noise file has zero power.")
 
                 if noise_name in self.real_noises:
                     raise ValueError(f"Duplicate noise name detected: {noise_name!r}.")

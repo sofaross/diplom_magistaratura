@@ -41,7 +41,7 @@ class RealtimeSpeechEmotionRecognizer:
 
     Пример использования:
         r = RealtimeSpeechEmotionRecognizer(
-            emotion_model_path="data/processed/models/emotion/emotion_model_best.pt",
+            emotion_model_path="data/processed/models/emotion/emotion_model_final.pt",
             emotion_map_path="data/processed/models/emotion/emotion_map.json",
             speech_model_name="facebook/wav2vec2-base-960h",
         )
@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--emotion-model",
         required=True,
-        help="Путь к чекпоинту emotion-модели (.pt), например data/processed/models/emotion/emotion_model_best.pt",
+        help="Путь к чекпоинту emotion-модели (.pt), например data/processed/models/emotion/emotion_model_final.pt",
     )
     parser.add_argument(
         "--emotion-map",

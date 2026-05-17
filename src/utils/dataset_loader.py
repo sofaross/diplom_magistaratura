@@ -522,18 +522,26 @@ class EmotionDataset(Dataset):
         if random.random() >= float(cfg.noise_prob):
             return clean_audio
 
-        selected_noise_name = self._sample_waveform_noise_name()
+        max_attempts = 3
         duration = float(clean_audio.shape[0]) / float(self.noise_manager.sample_rate)
-        snr_db = random.uniform(float(cfg.snr_min), float(cfg.snr_max))
 
-        if selected_noise_name in self.noise_manager.SYNTHETIC_NOISES or selected_noise_name == "brownian":
-            synthetic_name = "brown" if selected_noise_name == "brownian" else selected_noise_name
-            noise = self.noise_manager.generate_synthetic_noise(synthetic_name, duration)
-        else:
-            noise = self.noise_manager.get_real_noise(selected_noise_name, duration)
+        for _ in range(max_attempts):
+            try:
+                selected_noise_name = self._sample_waveform_noise_name()
+                snr_db = random.uniform(float(cfg.snr_min), float(cfg.snr_max))
 
-        noisy_audio = self.noise_manager.add_noise(clean_audio, noise, snr_db=snr_db)
-        return normalize_audio(noisy_audio)
+                if selected_noise_name in self.noise_manager.SYNTHETIC_NOISES or selected_noise_name == "brownian":
+                    synthetic_name = "brown" if selected_noise_name == "brownian" else selected_noise_name
+                    noise = self.noise_manager.generate_synthetic_noise(synthetic_name, duration)
+                else:
+                    noise = self.noise_manager.get_real_noise(selected_noise_name, duration)
+
+                noisy_audio = self.noise_manager.add_noise(clean_audio, noise, snr_db=snr_db)
+                return normalize_audio(noisy_audio)
+            except ValueError:
+                continue
+
+        return clean_audio
 
     def _sample_waveform_noise_name(self) -> str:
         if self.noise_manager is None:

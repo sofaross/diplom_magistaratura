@@ -28,5 +28,5 @@ class ProjectConfig:
     models_dir: Path = REPO_ROOT / "data" / "processed" / "models"
     emotion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion"
     fusion_out_dir: Path = REPO_ROOT / "data" / "processed" / "models" / "fusion"
-    emotion_checkpoint_path: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion" / "emotion_model_best.pt"
+    emotion_checkpoint_path: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion" / "emotion_model_final.pt"
     emotion_map_path: Path = REPO_ROOT / "data" / "processed" / "models" / "emotion" / "emotion_map.json"

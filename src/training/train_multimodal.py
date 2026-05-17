@@ -189,7 +189,7 @@ def main():
             "Важно: для распознавания текста нужна модель, дообученная под ASR (CTC head)."
         ),
     )
-    parser.add_argument("--emotion-checkpoint", default="data/processed/models/emotion/emotion_model_best.pt")
+    parser.add_argument("--emotion-checkpoint", default="data/processed/models/emotion/emotion_model_final.pt")
     parser.add_argument("--emotion-map-json", default="data/processed/models/emotion/emotion_map.json")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=4)

@@ -70,6 +70,29 @@ class WaveformNoiseAugmentationTests(unittest.TestCase):
 
         self.assertFalse(torch.allclose(clean_mel, noisy_mel))
 
+    def test_waveform_noise_augmentation_falls_back_to_clean_audio_when_noise_invalid(self) -> None:
+        frame = pd.DataFrame([{"path": str(self.audio_path), "label": 0}])
+
+        dataset = EmotionDataset(
+            frame,
+            augment=False,
+            waveform_noise_augment=True,
+            waveform_noise_config=WaveformNoiseAugmentConfig(
+                noise_prob=1.0,
+                noise_dir=self.noise_dir,
+                noise_types=("white",),
+                snr_min=10.0,
+                snr_max=10.0,
+            ),
+            use_cache=False,
+        )
+
+        with patch.object(dataset.noise_manager, "add_noise", side_effect=ValueError("Noise power is zero")):
+            mel, label = dataset[0]
+
+        self.assertIsInstance(mel, torch.Tensor)
+        self.assertEqual(int(label.item()), 0)
+
     @patch("src.utils.dataset_loader.prepare_splits")
     def test_prepare_datasets_enables_waveform_noise_only_for_train(self, mock_prepare_splits) -> None:
         train_df = pd.DataFrame([{"path": str(self.audio_path), "label": 0}])

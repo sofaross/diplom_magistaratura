@@ -66,6 +66,18 @@ class NoiseManagerTests(unittest.TestCase):
         self.assertEqual(self.manager.get_real_noise_group(variant_name), "rain")
         self.assertEqual(noise.shape[0], int(0.75 * self.sample_rate))
 
+    def test_reload_real_noises_skips_zero_power_files(self) -> None:
+        self.noise_file_manager.save(np.zeros(self.sample_rate, dtype=np.float32), "silent.wav")
+
+        manager = NoiseManager(
+            noise_dir=self.noise_dir,
+            sample_rate=self.sample_rate,
+            random_seed=123,
+        )
+
+        self.assertNotIn("silent", manager.list_available_noise_variants())
+        self.assertTrue(any("silent.wav" in path for path in manager.load_errors))
+
     def test_add_noise_matches_target_snr(self) -> None:
         noise = self.manager.generate_synthetic_noise("white", duration=1.0)
         noisy = self.manager.add_noise(self.clean_audio, noise, snr_db=10.0)

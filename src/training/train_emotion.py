@@ -108,6 +108,8 @@ def train_emotion_model(
         raise ValueError(f"Unknown scheduler_name={scheduler_name!r}. Use 'plateau' or 'onecycle'.")
 
     best_val_acc = -1.0
+    best_val_f1 = -1.0
+    best_epoch = 0
     best_state_dict = None
     bad_epochs = 0
 
@@ -183,13 +185,10 @@ def train_emotion_model(
 
         if val_acc > best_val_acc + float(early_stopping_min_delta):
             best_val_acc = val_acc
+            best_val_f1 = float(val_metrics["f1_macro"])
+            best_epoch = int(epoch)
             best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             bad_epochs = 0
-            if out_dir is not None:
-                torch.save(
-                    {"state_dict": model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
-                    out_dir / "emotion_model_best.pt",
-                )
         else:
             bad_epochs += 1
             if bad_epochs >= int(early_stopping_patience):
@@ -202,7 +201,13 @@ def train_emotion_model(
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
 
-    return model
+    training_summary = {
+        "best_epoch": int(best_epoch),
+        "best_val_accuracy": float(best_val_acc),
+        "best_val_f1_macro": float(best_val_f1),
+        "stopped_epoch": int(epoch),
+    }
+    return model, training_summary
 
 
 def main():
@@ -211,7 +216,7 @@ def main():
     parser.add_argument("--ravdess-path", default="data/raw/ravdess")
     parser.add_argument("--model", choices=["baseline", "improved"], default="improved")
     parser.add_argument("--emotion-set", type=int, choices=[6, 8], default=6)
-    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -239,11 +244,11 @@ def main():
     parser.add_argument("--time-stretch-min", type=float, default=0.85)
     parser.add_argument("--time-stretch-max", type=float, default=1.20)
     parser.add_argument("--pitch-shift-bins", type=int, default=6)
-    parser.add_argument("--waveform-noise-augment", action="store_true")
-    parser.add_argument("--noise-prob", type=float, default=0.5)
+    parser.add_argument("--waveform-noise-augment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--noise-prob", type=float, default=0.4)
     parser.add_argument("--noise-dir", default="data/noise")
     parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
-    parser.add_argument("--snr-min", type=float, default=5.0)
+    parser.add_argument("--snr-min", type=float, default=8.0)
     parser.add_argument("--snr-max", type=float, default=20.0)
     args = parser.parse_args()
 
@@ -291,6 +296,16 @@ def main():
             max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
             cache_dir=cache_dir,
         )
+        if bool(args.waveform_noise_augment):
+            noise_manager = getattr(train_ds, "noise_manager", None)
+            load_errors = dict(getattr(noise_manager, "load_errors", {})) if noise_manager is not None else {}
+            if load_errors:
+                print(f"[эмоция] Отброшено шумовых файлов: {len(load_errors)}")
+                print("[эмоция] Отброшенные шумовые файлы:")
+                for bad_path, reason in sorted(load_errors.items()):
+                    print(f"  - {Path(bad_path).name}: {reason}")
+            else:
+                print("[эмоция] Отброшенных шумовых файлов: 0")
     except ValueError as e:
         raise SystemExit(str(e))
     train_loader, val_loader, test_loader = create_dataloaders(
@@ -319,7 +334,9 @@ def main():
         model = EmotionModel(num_emotions=len(emotion_map))
     else:
         model = EmotionModelImproved(num_emotions=len(emotion_map))
-    model = train_emotion_model(
+    print(f"[эмоция] Архитектура модели: {model.__class__.__name__}")
+
+    model, training_summary = train_emotion_model(
         model,
         train_loader,
         val_loader,
@@ -344,10 +361,19 @@ def main():
         f"f1_макро_экзамена={test_metrics['f1_macro']:.4f}"
     )
 
+    final_checkpoint_path = out_dir / "emotion_model_final.pt"
     torch.save(
         {"state_dict": model.state_dict(), "emotion_map": emotion_map, "test_metrics": test_metrics},
-        out_dir / "emotion_model_final.pt",
+        final_checkpoint_path,
     )
+    print(
+        f"[эмоция] Лучшая эпоха: {training_summary['best_epoch']} "
+        f"(val_acc={training_summary['best_val_accuracy']:.4f}, "
+        f"val_f1_macro={training_summary['best_val_f1_macro']:.4f})"
+    )
+    print("[эмоция] Финальная модель содержит лучшие веса по валидации.")
+    print(f"[эмоция] Финальная архитектура модели: {model.__class__.__name__}")
+    print(f"[эмоция] Финальный чекпоинт сохранён: {final_checkpoint_path}")
 
 
 if __name__ == "__main__":
