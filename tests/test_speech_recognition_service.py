@@ -7,10 +7,25 @@ from unittest.mock import patch
 import numpy as np
 
 from configs.config import ProjectConfig
+from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
 from src.services.speech_recognition_service import SpeechRecognitionService
 
 
 class SpeechRecognitionServiceTests(unittest.TestCase):
+    def test_wav2vec2_wrapper_falls_back_when_pyctcdecode_missing(self) -> None:
+        with patch(
+            "src.models.wav2vec2_wrapper.AutoProcessor.from_pretrained",
+            side_effect=ImportError("pyctcdecode is required"),
+        ):
+            with patch(
+                "src.models.wav2vec2_wrapper.Wav2Vec2Processor.from_pretrained",
+                return_value="fallback_processor",
+            ) as fallback_loader:
+                processor = Wav2Vec2Wrapper._load_processor("dummy-model")
+
+        self.assertEqual(processor, "fallback_processor")
+        fallback_loader.assert_called_once_with("dummy-model")
+
     def test_recognize_uses_language_specific_model(self) -> None:
         loaded_model_names: list[str] = []
 

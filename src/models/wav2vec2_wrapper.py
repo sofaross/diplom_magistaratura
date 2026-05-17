@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from transformers import AutoModelForCTC, AutoProcessor
+from transformers import AutoModelForCTC, AutoProcessor, Wav2Vec2Processor
 
 
 @dataclass(slots=True)
@@ -38,7 +38,7 @@ class Wav2Vec2Wrapper:
         )
 
         try:
-            processor = AutoProcessor.from_pretrained(model_name)
+            processor = cls._load_processor(model_name)
             model = AutoModelForCTC.from_pretrained(model_name)
         except Exception as exc:
             raise RuntimeError(
@@ -56,6 +56,16 @@ class Wav2Vec2Wrapper:
             model=model,
             sample_rate=int(sample_rate),
         )
+
+    @staticmethod
+    def _load_processor(model_name: str) -> Any:
+        try:
+            return AutoProcessor.from_pretrained(model_name)
+        except ImportError as exc:
+            error_text = str(exc)
+            if "pyctcdecode" not in error_text:
+                raise
+            return Wav2Vec2Processor.from_pretrained(model_name)
 
     @property
     def hidden_size(self) -> int:

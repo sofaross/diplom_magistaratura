@@ -128,14 +128,99 @@ class InteractivePipelineRunner:
         print("Запись -> шум -> распознавание речи -> распознавание эмоций\n")
 
     def _obtain_source_audio(self) -> Path:
-        if self._ask_yes_no("Записать новое голосовое сообщение? [y/n]: ", default=True):
-            duration = self._ask_float("Введите длительность записи в секундах: ", minimum=0.1)
-            print("Идёт запись. Говорите...")
-            _, saved_path = self.microphone_capture.listen_and_save(duration=duration)
-            print(f"Аудио сохранено: {saved_path}")
-            return saved_path.resolve()
+        while True:
+            clean_recordings = self._list_recordings(self.config.clean_recordings_dir)
+            noisy_recordings = self._list_recordings(self.config.noisy_recordings_dir)
+            total_recordings = len(clean_recordings) + len(noisy_recordings)
 
-        return self._ask_existing_audio_path()
+            print("Выберите источник аудио:")
+            print("1 - записать новое голосовое сообщение")
+            print(f"2 - выбрать из уже записанных ({total_recordings})")
+            print("3 - указать путь к аудиофайлу вручную")
+            choice = input("Введите номер варианта: ").strip()
+
+            if choice == "1":
+                duration = self._ask_float("Введите длительность записи в секундах: ", minimum=0.1)
+                print("Идёт запись. Говорите...")
+                _, saved_path = self.microphone_capture.listen_and_save(duration=duration)
+                print(f"Аудио сохранено: {saved_path}")
+                return saved_path.resolve()
+
+            if choice == "2":
+                if total_recordings == 0:
+                    print("Сохранённых записей пока нет.")
+                    continue
+                selected_path = self._ask_saved_recording_path(clean_recordings, noisy_recordings)
+                if selected_path is not None:
+                    return selected_path
+                continue
+
+            if choice == "3":
+                return self._ask_existing_audio_path()
+
+            print("Неверный выбор. Введите 1, 2 или 3.")
+
+    def _ask_saved_recording_path(
+        self,
+        clean_recordings: list[Path],
+        noisy_recordings: list[Path],
+    ) -> Path | None:
+        while True:
+            print("\nВыберите тип сохранённых записей:")
+            print(f"1 - без шума ({len(clean_recordings)})")
+            print(f"2 - с шумом ({len(noisy_recordings)})")
+            print("3 - назад")
+            choice = input("Введите номер варианта: ").strip()
+
+            if choice == "1":
+                if not clean_recordings:
+                    print("Нет сохранённых записей без шума.")
+                    continue
+                return self._choose_recording_from_list(
+                    clean_recordings,
+                    title="Доступные записи без шума:",
+                )
+
+            if choice == "2":
+                if not noisy_recordings:
+                    print("Нет сохранённых записей с шумом.")
+                    continue
+                return self._choose_recording_from_list(
+                    noisy_recordings,
+                    title="Доступные записи с шумом:",
+                )
+
+            if choice == "3":
+                return None
+
+            print("Неверный выбор. Введите 1, 2 или 3.")
+
+    def _choose_recording_from_list(self, recordings: list[Path], *, title: str) -> Path:
+        print(f"\n{title}")
+        for index, path in enumerate(recordings, start=1):
+            print(f"{index} - {path.name}")
+
+        while True:
+            raw_value = input("Выберите запись по номеру: ").strip()
+            try:
+                index = int(raw_value)
+            except ValueError:
+                print("Введите номер из списка.")
+                continue
+
+            if 1 <= index <= len(recordings):
+                return recordings[index - 1]
+            print("Номер вне диапазона списка.")
+
+    @staticmethod
+    def _list_recordings(directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        return sorted(
+            (path.resolve() for path in directory.rglob("*.wav") if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
 
     def _ask_existing_audio_path(self) -> Path:
         while True:
