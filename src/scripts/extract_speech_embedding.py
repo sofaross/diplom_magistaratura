@@ -22,8 +22,6 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 if __name__ == "__main__" and __package__ is None:
-    # Позволяет запускать файл напрямую (зелёная кнопка в PyCharm) как скрипт,
-    # но при этом импортировать `src.*` как пакет.
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.inference.wav2vec2_inference import transcribe_and_embed

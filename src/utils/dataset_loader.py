@@ -591,19 +591,29 @@ class EmotionDataset(Dataset):
         return out
 
 
-class MultimodalDataset(Dataset):
+class MultimodalDataset(EmotionDataset):
 
     def __init__(
         self,
         dataframe: pd.DataFrame,
+        augment: bool = False,
+        augment_config: Optional[MelAugmentConfig] = None,
+        waveform_noise_augment: bool = False,
+        waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
+        max_frames: Optional[int] = None,
         cache_dir: Optional[Path] = None,
         use_cache: bool = True,
     ):
-        self.df = dataframe.reset_index(drop=True)
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
-        self.use_cache = bool(use_cache and self.cache_dir is not None)
-        if self.use_cache:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        super().__init__(
+            dataframe=dataframe,
+            augment=augment,
+            augment_config=augment_config,
+            waveform_noise_augment=waveform_noise_augment,
+            waveform_noise_config=waveform_noise_config,
+            max_frames=max_frames,
+            cache_dir=cache_dir,
+            use_cache=use_cache,
+        )
 
     def __len__(self):
         return len(self.df)
@@ -615,46 +625,24 @@ class MultimodalDataset(Dataset):
         path = row["path"]
         label = row["label"]
 
-        audio = load_audio(path)
-        audio = normalize_audio(audio)
-        audio = trim_silence(audio)
+        audio = self._load_preprocessed_audio(path)
+        if self.waveform_noise_augment:
+            audio = self._apply_waveform_noise_augmentation(audio)
+            mel = self._compute_mel_from_audio(audio)
+        else:
+            mel = self._load_or_compute_mel(path)
 
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.size == 0:
-            audio = np.zeros(160, dtype=np.float32)
-
-        # Для fusion полезно тоже кэшировать mel (это ускоряет обучение fusion-модели).
-        mel = self._load_or_compute_mel(path, audio)
+        if self.augment:
+            mel = self._augment_mel(mel)
+        if self.max_frames is not None and int(mel.shape[-1]) > int(self.max_frames):
+            max_frames = int(self.max_frames)
+            max_start = int(mel.shape[-1]) - max_frames
+            start = random.randint(0, max_start) if self.augment else max_start // 2
+            mel = mel[:, :, start : start + max_frames]
 
         label = torch.tensor(label, dtype=torch.long)
 
         return audio, mel, label
-
-    def _cache_path(self, audio_path: str) -> Optional[Path]:
-        if not self.use_cache or self.cache_dir is None:
-            return None
-        key = hashlib.md5(audio_path.encode("utf-8")).hexdigest()
-        return self.cache_dir / f"{key}.pt"
-
-    def _load_or_compute_mel(self, audio_path: str, audio: np.ndarray) -> torch.Tensor:
-        cache_path = self._cache_path(audio_path)
-        if cache_path is not None and cache_path.exists():
-            mel = torch.load(cache_path, map_location="cpu")
-            if isinstance(mel, dict) and "mel" in mel:
-                mel = mel["mel"]
-            if not isinstance(mel, torch.Tensor):
-                raise ValueError(f"Некорректный формат кэша mel: {cache_path}")
-            return mel
-
-        mel_np = extract_mel_spectrogram(audio)
-        mel = torch.from_numpy(mel_np).unsqueeze(0).float()
-        mel = _standardize_mel(mel)
-
-        if cache_path is not None:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(mel, cache_path)
-
-        return mel
 
 
 # ===============================
@@ -794,21 +782,52 @@ def prepare_multimodal_datasets(
     crema_path,
     ravdess_path,
     *,
+    emotion_map=None,
     emotion_set: int = 8,
+    augment: bool = False,
+    augment_config: Optional[MelAugmentConfig] = None,
+    waveform_noise_augment: bool = False,
+    waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
+    max_frames: Optional[int] = None,
     cache_dir: Optional[Path] = None,
 ):
 
     train_df, val_df, test_df, emotion_map = prepare_splits(
         crema_path,
         ravdess_path,
+        emotion_map=emotion_map,
         verbose=True,
         emotion_set=emotion_set,
     )
 
     return (
-        MultimodalDataset(train_df, cache_dir=cache_dir),
-        MultimodalDataset(val_df, cache_dir=cache_dir),
-        MultimodalDataset(test_df, cache_dir=cache_dir),
+        MultimodalDataset(
+            train_df,
+            augment=augment,
+            augment_config=augment_config,
+            waveform_noise_augment=waveform_noise_augment,
+            waveform_noise_config=waveform_noise_config,
+            max_frames=max_frames,
+            cache_dir=cache_dir,
+        ),
+        MultimodalDataset(
+            val_df,
+            augment=False,
+            augment_config=augment_config,
+            waveform_noise_augment=False,
+            waveform_noise_config=waveform_noise_config,
+            max_frames=max_frames,
+            cache_dir=cache_dir,
+        ),
+        MultimodalDataset(
+            test_df,
+            augment=False,
+            augment_config=augment_config,
+            waveform_noise_augment=False,
+            waveform_noise_config=waveform_noise_config,
+            max_frames=max_frames,
+            cache_dir=cache_dir,
+        ),
         emotion_map,
     )
 
@@ -883,16 +902,33 @@ def create_multimodal_dataloaders(
     batch_size=4,
     num_workers=0,
     *,
+    balanced_sampling: bool = False,
     with_lengths: bool = False,
     pad_value: float = 0.0,
 ):
 
     collate = multimodal_collate_fn_with_lengths if with_lengths else multimodal_collate_fn
+    sampler = None
+    if balanced_sampling:
+        try:
+            labels = train_dataset.df["label"].astype(int).tolist()
+            if labels:
+                counts = np.bincount(np.asarray(labels, dtype=np.int64))
+                counts = np.maximum(counts, 1)
+                sample_weights = [1.0 / float(counts[int(y)]) for y in labels]
+                sampler = WeightedRandomSampler(
+                    weights=torch.as_tensor(sample_weights, dtype=torch.double),
+                    num_samples=len(sample_weights),
+                    replacement=True,
+                )
+        except Exception:
+            sampler = None
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=num_workers,
         collate_fn=lambda b: collate(b, pad_value=pad_value),
     )

@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.audio_io.audio_capture import MicrophoneCapture
 from src.audio_io.audio_file_manager import AudioFileManager
+from configs.config import ProjectConfig
 
 
 def simple_recording_test():
@@ -24,7 +25,7 @@ def simple_recording_test():
     print("=" * 60)
 
     # Папка для сохранения (твоя папка withoutNoise)
-    save_path = REPO_ROOT / "data" / "recording" / "withoutNoise"
+    save_path = ProjectConfig().clean_recordings_dir
 
     # Создаём менеджер файлов
     manager = AudioFileManager(

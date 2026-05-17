@@ -21,7 +21,12 @@ from src.inference.wav2vec2_inference import extract_embedding
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
 from src.models.multimodal_model import FusionModel
 from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
-from src.utils.dataset_loader import MultimodalDataset, create_multimodal_dataloaders, prepare_splits
+from src.utils.dataset_loader import (
+    MelAugmentConfig,
+    WaveformNoiseAugmentConfig,
+    create_multimodal_dataloaders,
+    prepare_multimodal_datasets,
+)
 
 
 def _resolve_repo_path(value):
@@ -181,6 +186,7 @@ def main():
     parser = argparse.ArgumentParser(prog="python -m src.training.train_multimodal")
     parser.add_argument("--crema-path", default="data/raw/crema-d/AudioWAV")
     parser.add_argument("--ravdess-path", default="data/raw/ravdess")
+    parser.add_argument("--emotion-set", type=int, choices=[6, 8], default=6)
     parser.add_argument(
         "--speech-model-name",
         default="facebook/wav2vec2-base-960h",
@@ -197,6 +203,25 @@ def main():
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out-dir", default="data/processed/models/fusion")
+    parser.add_argument("--cache-dir", default="data/processed/features/mel_cache")
+    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--balanced-sampling", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="Если >0, ограничивает длину mel по времени для emotion-ветки fusion-модели.",
+    )
+    parser.add_argument("--noise-std-max", type=float, default=0.25)
+    parser.add_argument("--time-stretch-min", type=float, default=0.85)
+    parser.add_argument("--time-stretch-max", type=float, default=1.20)
+    parser.add_argument("--pitch-shift-bins", type=int, default=6)
+    parser.add_argument("--waveform-noise-augment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--noise-prob", type=float, default=0.5)
+    parser.add_argument("--noise-dir", default="data/noise")
+    parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
+    parser.add_argument("--snr-min", type=float, default=5.0)
+    parser.add_argument("--snr-max", type=float, default=20.0)
     args = parser.parse_args()
 
     crema_path = _resolve_repo_path(args.crema_path)
@@ -204,24 +229,69 @@ def main():
     emotion_checkpoint_path = _resolve_repo_path(args.emotion_checkpoint)
     emotion_map_json_path = _resolve_repo_path(args.emotion_map_json)
     out_dir = _resolve_repo_path(args.out_dir)
+    cache_dir = _resolve_repo_path(args.cache_dir)
+    noise_dir = _resolve_repo_path(args.noise_dir)
 
     emotion_map = _load_emotion_map(emotion_map_json_path)
-    emotion_set = _infer_emotion_set(emotion_map)
+    emotion_set = int(args.emotion_set)
+    checkpoint_emotion_set = _infer_emotion_set(emotion_map)
+    if checkpoint_emotion_set != emotion_set:
+        raise SystemExit(
+            f"emotion-set={emotion_set} не совпадает с emotion_map из чекпоинта "
+            f"({checkpoint_emotion_set} классов)."
+        )
 
     try:
-        train_df, val_df, test_df, _ = prepare_splits(
+        aug_cfg = MelAugmentConfig(
+            noise_std_max=float(args.noise_std_max),
+            time_stretch_min=float(args.time_stretch_min),
+            time_stretch_max=float(args.time_stretch_max),
+            pitch_shift_bins=int(args.pitch_shift_bins),
+        )
+        waveform_noise_cfg = None
+        if bool(args.waveform_noise_augment):
+            waveform_noise_cfg = WaveformNoiseAugmentConfig(
+                noise_prob=float(args.noise_prob),
+                noise_dir=noise_dir,
+                noise_types=tuple(str(name) for name in args.noise_types),
+                snr_min=float(args.snr_min),
+                snr_max=float(args.snr_max),
+            )
+            print("[fusion] Включена waveform-level noise augmentation.")
+            print(
+                f"[fusion] noise_prob={float(args.noise_prob):.2f} "
+                f"noise_types={', '.join(str(name) for name in args.noise_types)} "
+                f"snr=[{float(args.snr_min):g}, {float(args.snr_max):g}] dB "
+                f"noise_dir={noise_dir}"
+            )
+            print("[fusion] Валидация и тест останутся без шумовой аугментации.")
+        else:
+            print("[fusion] Waveform-level noise augmentation отключена.")
+
+        train_ds, val_ds, test_ds, _ = prepare_multimodal_datasets(
             crema_path,
             ravdess_path,
             emotion_map=emotion_map,
-            verbose=True,
             emotion_set=emotion_set,
+            augment=bool(args.augment),
+            augment_config=aug_cfg,
+            waveform_noise_augment=bool(args.waveform_noise_augment),
+            waveform_noise_config=waveform_noise_cfg,
+            max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
+            cache_dir=cache_dir,
         )
+        if bool(args.waveform_noise_augment):
+            noise_manager = getattr(train_ds, "noise_manager", None)
+            load_errors = dict(getattr(noise_manager, "load_errors", {})) if noise_manager is not None else {}
+            if load_errors:
+                print(f"[fusion] Отброшено шумовых файлов: {len(load_errors)}")
+                print("[fusion] Отброшенные шумовые файлы:")
+                for bad_path, reason in sorted(load_errors.items()):
+                    print(f"  - {Path(bad_path).name}: {reason}")
+            else:
+                print("[fusion] Отброшенных шумовых файлов: 0")
     except ValueError as e:
         raise SystemExit(str(e))
-
-    train_ds = MultimodalDataset(train_df)
-    val_ds = MultimodalDataset(val_df)
-    test_ds = MultimodalDataset(test_df)
 
     train_loader, val_loader, test_loader = create_multimodal_dataloaders(
         train_ds,
@@ -229,6 +299,7 @@ def main():
         test_ds,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        balanced_sampling=bool(args.balanced_sampling),
         with_lengths=True,
     )
 

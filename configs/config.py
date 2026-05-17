@@ -14,10 +14,11 @@ class ProjectConfig:
     crema_path: Path = REPO_ROOT / "data" / "raw" / "crema-d" / "AudioWAV"
     ravdess_path: Path = REPO_ROOT / "data" / "raw" / "ravdess"
     noise_dir: Path = REPO_ROOT / "data" / "noise"
+    test_data_dir: Path = REPO_ROOT / "data" / "test"
     recordings_dir: Path = REPO_ROOT / "data" / "recording"
-    clean_recordings_dir: Path = REPO_ROOT / "data" / "recording" / "withoutNoise"
-    noisy_recordings_dir: Path = REPO_ROOT / "data" / "recording" / "withNoise"
-    processed_audio_dir: Path = REPO_ROOT / "data" / "processed" / "audio"
+    clean_recordings_dir: Path = recordings_dir / "real" / "withoutNoise"
+    noisy_recordings_dir: Path = recordings_dir / "real" / "withNoise"
+    processed_audio_dir: Path = test_data_dir / "audio"
 
     # Models
     # Важно: для ASR нужен Wav2Vec2 с CTC головой (ASR-модель), а не просто "xlsr-53" без CTC.
