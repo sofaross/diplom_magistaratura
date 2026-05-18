@@ -4,8 +4,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 if __name__ == "__main__" and __package__ is None:
-    # Позволяет запускать файл напрямую (зелёная кнопка в PyCharm) как скрипт,
-    # но при этом импортировать `src.*` как пакет.
     sys.path.insert(0, str(REPO_ROOT))
 
 import argparse
@@ -57,9 +55,7 @@ def _load_state_dict(checkpoint_path: Path):
 def _infer_emotion_set(emotion_map: dict[str, int]) -> int:
     num_classes = len(emotion_map)
     if num_classes not in {6, 8}:
-        raise ValueError(
-            f"Unsupported emotion map size: {num_classes}. Expected 6 or 8 classes."
-        )
+        raise ValueError(f"Unsupported emotion map size: {num_classes}. Expected 6 or 8 classes.")
     return num_classes
 
 
@@ -89,20 +85,57 @@ def train_fusion_model(
     emotion_model,
     train_loader,
     val_loader,
-    epochs=5,
+    epochs=20,
     lr=5e-4,
+    weight_decay=5e-4,
+    max_grad_norm=1.0,
+    *,
+    scheduler_name: str = "onecycle",
+    onecycle_pct_start: float = 0.1,
+    early_stopping_patience=6,
+    early_stopping_min_delta=1e-4,
+    speech_layer: int = -1,
+    speech_pool: str = "mean",
     device="cpu",
     out_dir=None,
 ):
     device = torch.device(device)
     fusion_model.to(device)
     emotion_model.to(device)
+    emotion_model.eval()
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(fusion_model.parameters(), lr=lr)
+    optimizer = optim.AdamW(fusion_model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
+
+    scheduler = None
+    scheduler_name = str(scheduler_name).lower().strip()
+    if scheduler_name == "plateau":
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=0.5,
+            patience=2,
+            threshold=1e-4,
+        )
+    elif scheduler_name == "onecycle":
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=float(lr),
+            epochs=int(epochs),
+            steps_per_epoch=len(train_loader),
+            pct_start=float(onecycle_pct_start),
+            anneal_strategy="cos",
+            div_factor=25.0,
+            final_div_factor=1e4,
+        )
+    elif scheduler_name != "none":
+        raise ValueError(f"Unknown scheduler_name={scheduler_name!r}. Use 'none', 'plateau' or 'onecycle'.")
 
     best_val_acc = -1.0
+    best_val_f1 = -1.0
+    best_epoch = 0
     best_state_dict = None
+    bad_epochs = 0
 
     for epoch in range(1, epochs + 1):
         fusion_model.train()
@@ -125,12 +158,14 @@ def train_fusion_model(
                 speech_emb = extract_embedding(
                     speech_wrapper,
                     audios,
+                    layer=int(speech_layer),
+                    pool=str(speech_pool),
                     preprocess=False,
-                )
-                speech_emb = speech_emb.to(device)
+                ).to(device)
+                emotion_emb = emotion_model.extract_embedding(mels, lengths=lengths).to(device)
 
-                emotion_emb = emotion_model.extract_embedding(mels, lengths=lengths)
-                emotion_emb = emotion_emb.to(device)
+            speech_emb = speech_emb.detach().clone()
+            emotion_emb = emotion_emb.detach().clone()
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -138,7 +173,11 @@ def train_fusion_model(
             loss = criterion(logits, labels)
 
             loss.backward()
+            if max_grad_norm is not None and float(max_grad_norm) > 0:
+                nn.utils.clip_grad_norm_(fusion_model.parameters(), float(max_grad_norm))
             optimizer.step()
+            if scheduler_name == "onecycle":
+                scheduler.step()
 
             batch_size = int(labels.shape[0])
             running_loss += float(loss.item()) * batch_size
@@ -152,34 +191,73 @@ def train_fusion_model(
             val_loader,
             device=device,
             speech_preprocess=False,
+            speech_layer=int(speech_layer),
+            speech_pool=str(speech_pool),
         )
         val_acc = float(val_metrics["accuracy"])
+        val_f1 = float(val_metrics["f1_macro"])
 
+        if scheduler_name == "plateau":
+            scheduler.step(val_f1)
+
+        current_lr = float(optimizer.param_groups[0]["lr"])
         print(
-            f"[fusion] epoch={epoch} train_loss={train_loss:.4f} "
-            f"val_acc={val_acc:.4f} val_f1_macro={val_metrics['f1_macro']:.4f}"
+            f"[fusion] epoch={epoch} lr={current_lr:.2e} train_loss={train_loss:.4f} "
+            f"val_acc={val_acc:.4f} val_f1_macro={val_f1:.4f}"
         )
 
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
-                {"state_dict": fusion_model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
+                {
+                    "state_dict": fusion_model.state_dict(),
+                    "epoch": epoch,
+                    "val_metrics": val_metrics,
+                    "speech_layer": int(speech_layer),
+                    "speech_pool": str(speech_pool),
+                },
                 out_dir / "fusion_model_last.pt",
             )
 
-        if val_acc > best_val_acc:
+        if val_f1 > best_val_f1 + float(early_stopping_min_delta):
             best_val_acc = val_acc
+            best_val_f1 = val_f1
+            best_epoch = int(epoch)
             best_state_dict = {k: v.detach().cpu().clone() for k, v in fusion_model.state_dict().items()}
+            bad_epochs = 0
             if out_dir is not None:
                 torch.save(
-                    {"state_dict": fusion_model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
+                    {
+                        "state_dict": fusion_model.state_dict(),
+                        "epoch": epoch,
+                        "val_metrics": val_metrics,
+                        "speech_layer": int(speech_layer),
+                        "speech_pool": str(speech_pool),
+                    },
                     out_dir / "fusion_model_best.pt",
                 )
+        else:
+            bad_epochs += 1
+            if bad_epochs >= int(early_stopping_patience):
+                print(
+                    f"[fusion] early stopping: нет улучшения val_f1_macro "
+                    f"{bad_epochs} эпох подряд (patience={early_stopping_patience})."
+                )
+                break
 
     if best_state_dict is not None:
         fusion_model.load_state_dict(best_state_dict)
 
-    return fusion_model
+    training_summary = {
+        "best_epoch": int(best_epoch),
+        "best_val_accuracy": float(best_val_acc),
+        "best_val_f1_macro": float(best_val_f1),
+        "selection_metric": "val_f1_macro",
+        "stopped_epoch": int(epoch),
+        "speech_layer": int(speech_layer),
+        "speech_pool": str(speech_pool),
+    }
+    return fusion_model, training_summary
 
 
 def main():
@@ -192,15 +270,23 @@ def main():
         default="facebook/wav2vec2-base-960h",
         help=(
             "Wav2Vec2 CTC модель из HuggingFace. "
-            "Важно: для распознавания текста нужна модель, дообученная под ASR (CTC head)."
+            "Для fusion используется её acoustic embedding, а не распознанный текст."
         ),
     )
+    parser.add_argument("--speech-layer", type=int, default=-1, help="Слой speech-модели для embedding (-1 = последний).")
+    parser.add_argument("--speech-pool", choices=["mean", "max"], default="mean", help="Пулинг по времени для speech embedding.")
     parser.add_argument("--emotion-checkpoint", default="data/processed/models/emotion/emotion_model_final.pt")
     parser.add_argument("--emotion-map-json", default="data/processed/models/emotion/emotion_map.json")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--weight-decay", type=float, default=5e-4)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--scheduler", choices=["none", "plateau", "onecycle"], default="onecycle")
+    parser.add_argument("--onecycle-pct-start", type=float, default=0.1)
+    parser.add_argument("--early-stopping-patience", type=int, default=6)
+    parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out-dir", default="data/processed/models/fusion")
     parser.add_argument("--cache-dir", default="data/processed/features/mel_cache")
@@ -305,8 +391,6 @@ def main():
 
     device = torch.device(args.device)
 
-    # Аудио в MultimodalDataset уже нормализовано и обрезано (trim_silence),
-    # поэтому здесь можно отключить дополнительную предобработку.
     speech_wrapper = Wav2Vec2Wrapper.from_pretrained(
         model_name=args.speech_model_name,
         device=device,
@@ -326,7 +410,7 @@ def main():
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fusion_model = train_fusion_model(
+    fusion_model, training_summary = train_fusion_model(
         fusion_model,
         speech_wrapper,
         emotion_model,
@@ -334,6 +418,14 @@ def main():
         val_loader,
         epochs=args.epochs,
         lr=args.lr,
+        weight_decay=args.weight_decay,
+        max_grad_norm=args.max_grad_norm,
+        scheduler_name=args.scheduler,
+        onecycle_pct_start=args.onecycle_pct_start,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_min_delta=args.early_stopping_min_delta,
+        speech_layer=args.speech_layer,
+        speech_pool=args.speech_pool,
         device=device,
         out_dir=out_dir,
     )
@@ -345,14 +437,28 @@ def main():
         test_loader,
         device=device,
         speech_preprocess=False,
+        speech_layer=args.speech_layer,
+        speech_pool=args.speech_pool,
     )
     print(
         f"[fusion] test_acc={test_metrics['accuracy']:.4f} "
         f"test_f1_macro={test_metrics['f1_macro']:.4f}"
     )
+    print(
+        f"[fusion] Лучшая эпоха: {training_summary['best_epoch']} "
+        f"(val_acc={training_summary['best_val_accuracy']:.4f}, "
+        f"val_f1_macro={training_summary['best_val_f1_macro']:.4f})"
+    )
+    print("[fusion] Финальная модель содержит лучшие веса по val_f1_macro.")
 
     torch.save(
-        {"state_dict": fusion_model.state_dict(), "test_metrics": test_metrics},
+        {
+            "state_dict": fusion_model.state_dict(),
+            "test_metrics": test_metrics,
+            "training_summary": training_summary,
+            "speech_layer": int(args.speech_layer),
+            "speech_pool": str(args.speech_pool),
+        },
         out_dir / "fusion_model_final.pt",
     )
 

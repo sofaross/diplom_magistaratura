@@ -67,7 +67,7 @@ class TrainMultimodalTests(unittest.TestCase):
                 "src.training.train_multimodal.evaluate_fusion_model",
                 return_value={"accuracy": 1.0, "f1_macro": 1.0},
             ):
-                train_fusion_model(
+                _, summary = train_fusion_model(
                     fusion_model,
                     speech_wrapper=object(),
                     emotion_model=emotion_model,
@@ -81,6 +81,49 @@ class TrainMultimodalTests(unittest.TestCase):
 
         self.assertIsNotNone(emotion_model.last_lengths)
         self.assertEqual(emotion_model.last_lengths.tolist(), [8, 5])
+        self.assertEqual(summary["selection_metric"], "val_f1_macro")
+
+    def test_train_fusion_model_uses_requested_speech_embedding_settings(self) -> None:
+        fusion_model = FusionModel(speech_dim=4, emotion_dim=128, num_classes=2)
+        emotion_model = DummyEmotionModel()
+
+        batch = (
+            [np.zeros(32, dtype=np.float32), np.zeros(24, dtype=np.float32)],
+            torch.zeros(2, 1, 128, 8),
+            torch.tensor([8, 5], dtype=torch.long),
+            torch.tensor([0, 1], dtype=torch.long),
+        )
+
+        with patch("src.training.train_multimodal.extract_embedding", return_value=torch.zeros(2, 4)) as mock_extract:
+            with patch(
+                "src.training.train_multimodal.evaluate_fusion_model",
+                return_value={"accuracy": 0.5, "f1_macro": 0.7},
+            ) as mock_eval:
+                _, summary = train_fusion_model(
+                    fusion_model,
+                    speech_wrapper=object(),
+                    emotion_model=emotion_model,
+                    train_loader=[batch],
+                    val_loader=[],
+                    epochs=1,
+                    lr=1e-3,
+                    speech_layer=8,
+                    speech_pool="max",
+                    device="cpu",
+                    out_dir=None,
+                )
+
+        self.assertEqual(mock_extract.call_args.kwargs["layer"], 8)
+        self.assertEqual(mock_extract.call_args.kwargs["pool"], "max")
+        self.assertEqual(mock_eval.call_args.kwargs["speech_layer"], 8)
+        self.assertEqual(mock_eval.call_args.kwargs["speech_pool"], "max")
+        self.assertEqual(summary["speech_layer"], 8)
+        self.assertEqual(summary["speech_pool"], "max")
+
+    def test_fusion_model_forward_returns_expected_shape(self) -> None:
+        model = FusionModel(speech_dim=16, emotion_dim=8, num_classes=6)
+        logits = model(torch.randn(3, 16), torch.randn(3, 8))
+        self.assertEqual(tuple(logits.shape), (3, 6))
 
 
 if __name__ == "__main__":

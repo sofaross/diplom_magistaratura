@@ -166,14 +166,15 @@ def train_emotion_model(
         train_loss = running_loss / max(1, num_samples)
         val_metrics = evaluate_emotion_model(model, val_loader, device=device)
         val_acc = float(val_metrics["accuracy"])
+        val_f1 = float(val_metrics["f1_macro"])
 
         if scheduler_name == "plateau":
-            scheduler.step(val_acc)
+            scheduler.step(val_f1)
 
         current_lr = float(optimizer.param_groups[0]["lr"])
         print(
             f"[эмоция] эпоха={epoch} lr={current_lr:.2e} ошибка_обучения={train_loss:.4f} "
-            f"точность_проверки={val_acc:.4f} f1_макро_проверки={val_metrics['f1_macro']:.4f}"
+            f"точность_проверки={val_acc:.4f} f1_макро_проверки={val_f1:.4f}"
         )
 
         if out_dir is not None:
@@ -183,9 +184,9 @@ def train_emotion_model(
                 out_dir / "emotion_model_last.pt",
             )
 
-        if val_acc > best_val_acc + float(early_stopping_min_delta):
+        if val_f1 > best_val_f1 + float(early_stopping_min_delta):
             best_val_acc = val_acc
-            best_val_f1 = float(val_metrics["f1_macro"])
+            best_val_f1 = val_f1
             best_epoch = int(epoch)
             best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             bad_epochs = 0
@@ -193,7 +194,7 @@ def train_emotion_model(
             bad_epochs += 1
             if bad_epochs >= int(early_stopping_patience):
                 print(
-                    f"[эмоция] early stopping: нет улучшения val_acc "
+                    f"[эмоция] early stopping: нет улучшения val_f1_macro "
                     f"{bad_epochs} эпох подряд (patience={early_stopping_patience})."
                 )
                 break
@@ -205,6 +206,7 @@ def train_emotion_model(
         "best_epoch": int(best_epoch),
         "best_val_accuracy": float(best_val_acc),
         "best_val_f1_macro": float(best_val_f1),
+        "selection_metric": "val_f1_macro",
         "stopped_epoch": int(epoch),
     }
     return model, training_summary
@@ -371,7 +373,7 @@ def main():
         f"(val_acc={training_summary['best_val_accuracy']:.4f}, "
         f"val_f1_macro={training_summary['best_val_f1_macro']:.4f})"
     )
-    print("[эмоция] Финальная модель содержит лучшие веса по валидации.")
+    print("[эмоция] Финальная модель содержит лучшие веса по val_f1_macro.")
     print(f"[эмоция] Финальная архитектура модели: {model.__class__.__name__}")
     print(f"[эмоция] Финальный чекпоинт сохранён: {final_checkpoint_path}")
 
