@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -54,6 +55,61 @@ class AudioCaptureTests(unittest.TestCase):
         self.assertEqual(saved_path, Path("fake_recording.wav"))
         self.assertEqual(len(manager.saved), 1)
         self.assertEqual(manager.saved[0][1], "sample.wav")
+
+    def test_get_input_device_name_returns_sounddevice_device_name(self) -> None:
+        mic = MicrophoneCapture(sample_rate=16000, file_manager=FakeFileManager(), auto_save=False)
+
+        with patch("src.audio_io.audio_capture.sd.query_devices", return_value={"name": "USB Microphone"}):
+            device_name = mic.get_input_device_name()
+
+        self.assertEqual(device_name, "USB Microphone")
+
+    def test_get_input_device_name_falls_back_when_query_fails(self) -> None:
+        mic = MicrophoneCapture(sample_rate=16000, file_manager=FakeFileManager(), auto_save=False)
+
+        with patch("src.audio_io.audio_capture.sd.query_devices", side_effect=RuntimeError("no device")):
+            device_name = mic.get_input_device_name()
+
+        self.assertEqual(device_name, "устройство ввода по умолчанию")
+
+    def test_list_input_devices_returns_only_input_capable_devices(self) -> None:
+        mic = MicrophoneCapture(sample_rate=16000, file_manager=FakeFileManager(), auto_save=False, input_device=2)
+        fake_devices = [
+            {"name": "Speakers", "max_input_channels": 0},
+            {"name": "Mic 1", "max_input_channels": 1},
+            {"name": "Mic 2", "max_input_channels": 2},
+        ]
+
+        with patch("src.audio_io.audio_capture.sd.query_devices", return_value=fake_devices):
+            with patch("src.audio_io.audio_capture.sd.default", new=SimpleNamespace(device=(1, 3))):
+                devices = mic.list_input_devices()
+
+        self.assertEqual(len(devices), 2)
+        self.assertEqual(devices[0]["name"], "Mic 1")
+        self.assertTrue(devices[0]["is_default"])
+        self.assertEqual(devices[1]["index"], 2)
+        self.assertTrue(devices[1]["is_selected"])
+
+    def test_set_input_device_updates_selected_device(self) -> None:
+        mic = MicrophoneCapture(sample_rate=16000, file_manager=FakeFileManager(), auto_save=False)
+
+        with patch("src.audio_io.audio_capture.sd.query_devices", return_value={"name": "Mic 3"}):
+            mic.set_input_device(3)
+
+        self.assertEqual(mic.input_device, 3)
+
+    def test_listen_passes_selected_input_device_to_sounddevice(self) -> None:
+        manager = FakeFileManager(sample_rate=16000)
+        mic = MicrophoneCapture(sample_rate=16000, file_manager=manager, auto_save=False, input_device=4)
+        fake_audio = np.full((160, 1), 0.1, dtype=np.float32)
+        duration = fake_audio.shape[0] / float(mic.sample_rate)
+
+        with patch.object(mic, "check_microphone", return_value=None):
+            with patch("src.audio_io.audio_capture.sd.rec", return_value=fake_audio) as mock_rec:
+                with patch("src.audio_io.audio_capture.sd.wait", return_value=None):
+                    mic.listen(duration=duration)
+
+        self.assertEqual(mock_rec.call_args.kwargs["device"], 4)
 
 
 if __name__ == "__main__":

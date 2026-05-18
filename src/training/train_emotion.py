@@ -10,8 +10,14 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from src.evaluation.evaluation import evaluate_emotion_model
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
+from src.training.losses import FocalCrossEntropyLoss, build_inverse_frequency_class_weights
 from src.utils.dataset_loader import (
     MelAugmentConfig,
     WaveformNoiseAugmentConfig,
@@ -19,10 +25,6 @@ from src.utils.dataset_loader import (
     prepare_datasets,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-if __name__ == "__main__" and __package__ is None:
-    sys.path.insert(0, str(REPO_ROOT))
 
 def _resolve_repo_path(value):
     path = Path(value)
@@ -48,6 +50,8 @@ def train_emotion_model(
     label_smoothing=0.05,
     max_grad_norm=1.0,
     *,
+    loss_name: str = "cross_entropy",
+    focal_gamma: float = 2.0,
     scheduler_name: str = "plateau",
     mixup_alpha: float = 0.0,
     mixup_prob: float = 0.0,
@@ -60,26 +64,29 @@ def train_emotion_model(
     device = torch.device(device)
     model.to(device)
 
-    # Взвешиваем классы, чтобы бороться с дисбалансом (CREMA-D + RAVDESS часто не идеально сбалансированы).
     class_weights = None
     try:
         labels = train_loader.dataset.df["label"].tolist()
-        num_classes = int(max(labels) + 1) if labels else None
-        if num_classes is not None and num_classes > 1:
-            counts = [0] * num_classes
-            for y in labels:
-                counts[int(y)] += 1
-            total = float(sum(counts))
-            # Чем меньше класс, тем больше вес.
-            weights = [total / max(1.0, (num_classes * float(c))) for c in counts]
-            class_weights = torch.tensor(weights, dtype=torch.float32)
+        class_weights = build_inverse_frequency_class_weights(labels)
     except Exception:
         class_weights = None
 
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights.to(device) if class_weights is not None else None,
-        label_smoothing=float(label_smoothing),
-    )
+    loss_name = str(loss_name).lower().strip()
+    loss_weights = class_weights.to(device) if class_weights is not None else None
+    if loss_name == "cross_entropy":
+        criterion = nn.CrossEntropyLoss(
+            weight=loss_weights,
+            label_smoothing=float(label_smoothing),
+        )
+    elif loss_name == "focal":
+        criterion = FocalCrossEntropyLoss(
+            gamma=float(focal_gamma),
+            weight=loss_weights,
+            label_smoothing=float(label_smoothing),
+            reduction="mean",
+        )
+    else:
+        raise ValueError(f"Unknown loss_name={loss_name!r}. Use 'cross_entropy' or 'focal'.")
 
     optimizer = optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
     scheduler = None
@@ -93,7 +100,6 @@ def train_emotion_model(
             threshold=1e-4,
         )
     elif scheduler_name == "onecycle":
-        # OneCycle обычно даёт более быстрое и стабильное обучение для CNN/RNN.
         scheduler = optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=float(lr),
@@ -115,12 +121,10 @@ def train_emotion_model(
 
     for epoch in range(1, epochs + 1):
         model.train()
-
         running_loss = 0.0
         num_samples = 0
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False):
-            # batch: (mels, labels) или (mels, lengths, labels)
             if len(batch) == 2:
                 mels, labels = batch
                 lengths = None
@@ -133,10 +137,15 @@ def train_emotion_model(
 
             optimizer.zero_grad(set_to_none=True)
 
-            # MixUp в пространстве mel-спектрограмм: дешёвая, но часто эффективная регуляризация.
-            do_mixup = float(mixup_alpha) > 0 and float(mixup_prob) > 0 and random.random() < float(mixup_prob)
+            do_mixup = (
+                float(mixup_alpha) > 0
+                and float(mixup_prob) > 0
+                and random.random() < float(mixup_prob)
+            )
             if do_mixup and int(labels.shape[0]) > 1:
-                lam = float(torch.distributions.Beta(float(mixup_alpha), float(mixup_alpha)).sample().item())
+                lam = float(
+                    torch.distributions.Beta(float(mixup_alpha), float(mixup_alpha)).sample().item()
+                )
                 index = torch.randperm(int(labels.shape[0]), device=device)
                 mixed_mels = lam * mels + (1.0 - lam) * mels[index]
                 y_a = labels
@@ -180,7 +189,13 @@ def train_emotion_model(
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
-                {"state_dict": model.state_dict(), "epoch": epoch, "val_metrics": val_metrics},
+                {
+                    "state_dict": model.state_dict(),
+                    "epoch": epoch,
+                    "val_metrics": val_metrics,
+                    "loss_name": loss_name,
+                    "focal_gamma": float(focal_gamma),
+                },
                 out_dir / "emotion_model_last.pt",
             )
 
@@ -207,6 +222,8 @@ def train_emotion_model(
         "best_val_accuracy": float(best_val_acc),
         "best_val_f1_macro": float(best_val_f1),
         "selection_metric": "val_f1_macro",
+        "loss_name": loss_name,
+        "focal_gamma": float(focal_gamma),
         "stopped_epoch": int(epoch),
     }
     return model, training_summary
@@ -225,6 +242,8 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.05)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--loss", choices=["cross_entropy", "focal"], default="cross_entropy")
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument("--scheduler", choices=["plateau", "onecycle"], default="onecycle")
     parser.add_argument("--onecycle-pct-start", type=float, default=0.1)
     parser.add_argument("--mixup-alpha", type=float, default=0.2)
@@ -289,6 +308,7 @@ def main():
             print("[эмоция] Валидация и тест останутся без шумовой аугментации.")
         else:
             print("[эмоция] Waveform-level noise augmentation отключена.")
+
         if bool(args.use_resd):
             print(
                 f"[эмоция] Подключён дополнительный датасет {args.resd_dataset_name} "
@@ -310,6 +330,7 @@ def main():
             resd_dataset_name=str(args.resd_dataset_name),
             resd_splits=tuple(str(name) for name in args.resd_splits),
         )
+
         if bool(args.waveform_noise_augment):
             noise_manager = getattr(train_ds, "noise_manager", None)
             load_errors = dict(getattr(noise_manager, "load_errors", {})) if noise_manager is not None else {}
@@ -320,8 +341,9 @@ def main():
                     print(f"  - {Path(bad_path).name}: {reason}")
             else:
                 print("[эмоция] Отброшенных шумовых файлов: 0")
-    except ValueError as e:
-        raise SystemExit(str(e))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
     train_loader, val_loader, test_loader = create_dataloaders(
         train_ds,
         val_ds,
@@ -336,10 +358,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     id_to_emotion = _build_id_to_emotion(emotion_map)
-    with open(out_dir / "emotion_map.json", "w", encoding="utf-8") as f:
+    with open(out_dir / "emotion_map.json", "w", encoding="utf-8") as file:
         json.dump(
             {"emotion_to_id": emotion_map, "id_to_emotion": id_to_emotion},
-            f,
+            file,
             ensure_ascii=False,
             indent=2,
         )
@@ -348,7 +370,12 @@ def main():
         model = EmotionModel(num_emotions=len(emotion_map))
     else:
         model = EmotionModelImproved(num_emotions=len(emotion_map))
+
     print(f"[эмоция] Архитектура модели: {model.__class__.__name__}")
+    if str(args.loss) == "focal":
+        print(f"[эмоция] Используется focal loss (gamma={float(args.focal_gamma):.2f}).")
+    else:
+        print("[эмоция] Используется cross-entropy loss.")
 
     model, training_summary = train_emotion_model(
         model,
@@ -359,6 +386,8 @@ def main():
         weight_decay=args.weight_decay,
         label_smoothing=args.label_smoothing,
         max_grad_norm=args.max_grad_norm,
+        loss_name=args.loss,
+        focal_gamma=args.focal_gamma,
         scheduler_name=args.scheduler,
         onecycle_pct_start=args.onecycle_pct_start,
         mixup_alpha=args.mixup_alpha,
@@ -377,7 +406,12 @@ def main():
 
     final_checkpoint_path = out_dir / "emotion_model_final.pt"
     torch.save(
-        {"state_dict": model.state_dict(), "emotion_map": emotion_map, "test_metrics": test_metrics},
+        {
+            "state_dict": model.state_dict(),
+            "emotion_map": emotion_map,
+            "test_metrics": test_metrics,
+            "training_summary": training_summary,
+        },
         final_checkpoint_path,
     )
     print(

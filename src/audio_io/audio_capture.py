@@ -18,6 +18,7 @@ class MicrophoneCapture:
 
     def __init__(self,sample_rate: int = 16000,min_rms: float = 0.005,max_clip_ratio: float = 0.01,*,file_manager: AudioFileManager | None = None,
         auto_save: bool = True,
+        input_device: int | str | None = None,
     ) -> None:
 
         self.sample_rate = int(sample_rate)
@@ -29,13 +30,73 @@ class MicrophoneCapture:
             sample_rate=self.sample_rate,
         )
         self.auto_save = bool(auto_save)
+        self.input_device = input_device
         self.last_saved_path: Path | None = None
+
+    def get_input_device_name(self) -> str:
+        """Возвращает имя входного устройства, которое использует sounddevice по умолчанию."""
+
+        try:
+            if self.input_device is None:
+                device_info = sd.query_devices(kind="input")
+            else:
+                device_info = sd.query_devices(self.input_device, kind="input")
+        except Exception:
+            return "устройство ввода по умолчанию"
+
+        if isinstance(device_info, dict):
+            name = str(device_info.get("name", "")).strip()
+            if name:
+                return name
+        return "устройство ввода по умолчанию"
+
+    def list_input_devices(self) -> list[dict[str, object]]:
+        """Возвращает список доступных устройств записи."""
+
+        devices = sd.query_devices()
+        try:
+            default_input, _ = sd.default.device
+        except Exception:
+            default_input = None
+
+        result: list[dict[str, object]] = []
+        for index, device in enumerate(devices):
+            max_input_channels = int(device.get("max_input_channels", 0))
+            if max_input_channels <= 0:
+                continue
+            result.append(
+                {
+                    "index": int(index),
+                    "name": str(device.get("name", f"Input device {index}")),
+                    "max_input_channels": max_input_channels,
+                    "is_default": default_input == index,
+                    "is_selected": self.input_device == index,
+                }
+            )
+        return result
+
+    def set_input_device(self, device: int | str | None) -> None:
+        """Явно задаёт устройство записи."""
+
+        if device is None or (isinstance(device, str) and not device.strip()):
+            self.input_device = None
+            return
+
+        if isinstance(device, str):
+            device = device.strip()
+
+        try:
+            sd.query_devices(device, kind="input")
+        except Exception as e:
+            raise ValueError(f"Не удалось выбрать устройство записи: {device!r}") from e
+
+        self.input_device = device
 
     def check_microphone(self) -> None:
         """Проверяет, что микрофон доступен и поддерживает нужные параметры."""
 
         try:
-            sd.check_input_settings(samplerate=int(self.sample_rate), channels=1)
+            sd.check_input_settings(device=self.input_device, samplerate=int(self.sample_rate), channels=1)
         except Exception as e:
             raise RuntimeError(
                 "Микрофон не найден или не поддерживает запись 16 kHz/mono. "
@@ -53,7 +114,13 @@ class MicrophoneCapture:
 
         try:
             frames = int(round(duration * int(self.sample_rate)))
-            audio = sd.rec(frames, samplerate=int(self.sample_rate), channels=1, dtype="float32")
+            audio = sd.rec(
+                frames,
+                samplerate=int(self.sample_rate),
+                channels=1,
+                dtype="float32",
+                device=self.input_device,
+            )
             sd.wait()
         except Exception as e:
             raise RuntimeError("Ошибка записи с микрофона (sounddevice/PortAudio).") from e

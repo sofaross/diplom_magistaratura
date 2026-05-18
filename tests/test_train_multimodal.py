@@ -125,6 +125,50 @@ class TrainMultimodalTests(unittest.TestCase):
         logits = model(torch.randn(3, 16), torch.randn(3, 8))
         self.assertEqual(tuple(logits.shape), (3, 6))
 
+    def test_fusion_model_forward_supports_modality_dropout(self) -> None:
+        model = FusionModel(
+            speech_dim=16,
+            emotion_dim=8,
+            num_classes=6,
+            modality_dropout_prob=1.0,
+        )
+        model.train()
+        logits = model(torch.randn(3, 16), torch.randn(3, 8))
+        self.assertEqual(tuple(logits.shape), (3, 6))
+
+    def test_train_fusion_model_supports_focal_loss(self) -> None:
+        fusion_model = FusionModel(speech_dim=4, emotion_dim=128, num_classes=2)
+        emotion_model = DummyEmotionModel()
+
+        batch = (
+            [np.zeros(32, dtype=np.float32), np.zeros(24, dtype=np.float32)],
+            torch.zeros(2, 1, 128, 8),
+            torch.tensor([8, 5], dtype=torch.long),
+            torch.tensor([0, 1], dtype=torch.long),
+        )
+
+        with patch("src.training.train_multimodal.extract_embedding", return_value=torch.zeros(2, 4)):
+            with patch(
+                "src.training.train_multimodal.evaluate_fusion_model",
+                return_value={"accuracy": 0.5, "f1_macro": 0.6},
+            ):
+                _, summary = train_fusion_model(
+                    fusion_model,
+                    speech_wrapper=object(),
+                    emotion_model=emotion_model,
+                    train_loader=[batch],
+                    val_loader=[],
+                    epochs=1,
+                    lr=1e-3,
+                    loss_name="focal",
+                    focal_gamma=1.5,
+                    device="cpu",
+                    out_dir=None,
+                )
+
+        self.assertEqual(summary["loss_name"], "focal")
+        self.assertAlmostEqual(summary["focal_gamma"], 1.5, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,11 @@ class InteractivePipelineRunner:
             choice = input("Введите номер варианта: ").strip()
 
             if choice == "1":
+                microphone_name = self.microphone_capture.get_input_device_name()
+                print(f"Текущее устройство записи: {microphone_name}")
+                self._maybe_select_input_device()
+                microphone_name = self.microphone_capture.get_input_device_name()
+                print(f"Устройство записи для этой сессии: {microphone_name}")
                 duration = self._ask_float("Введите длительность записи в секундах: ", minimum=0.1)
                 print("Идёт запись. Говорите...")
                 _, saved_path = self.microphone_capture.listen_and_save(duration=duration)
@@ -254,6 +259,48 @@ class InteractivePipelineRunner:
                 print(f"Поддерживаются только аудиофайлы: {supported}")
                 continue
             return path
+
+    def _maybe_select_input_device(self) -> None:
+        if not self._ask_yes_no("Сменить микрофон? [y/n]: ", default=False):
+            return
+
+        devices = self.microphone_capture.list_input_devices()
+        if not devices:
+            print("Доступных устройств записи не найдено.")
+            return
+
+        print("\nДоступные устройства записи:")
+        for item in devices:
+            markers: list[str] = []
+            if bool(item.get("is_default")):
+                markers.append("по умолчанию")
+            if bool(item.get("is_selected")):
+                markers.append("выбрано")
+            suffix = f" ({', '.join(markers)})" if markers else ""
+            print(
+                f"{int(item['index'])} - {item['name']} "
+                f"[каналов: {int(item['max_input_channels'])}]{suffix}"
+            )
+
+        while True:
+            raw_value = input(
+                "Введите индекс микрофона или нажмите Enter, чтобы оставить устройство по умолчанию: "
+            ).strip()
+            if not raw_value:
+                self.microphone_capture.set_input_device(None)
+                return
+
+            try:
+                selected_index = int(raw_value)
+            except ValueError:
+                print("Введите числовой индекс из списка.")
+                continue
+
+            try:
+                self.microphone_capture.set_input_device(selected_index)
+                return
+            except ValueError as exc:
+                print(str(exc))
 
     def _ask_speech_language(self) -> str:
         while True:

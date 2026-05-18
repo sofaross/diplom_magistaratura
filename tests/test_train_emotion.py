@@ -51,6 +51,35 @@ class TrainEmotionTests(unittest.TestCase):
         self.assertAlmostEqual(summary["best_val_f1_macro"], 0.60, places=6)
         self.assertEqual(summary["selection_metric"], "val_f1_macro")
 
+    def test_train_emotion_model_supports_focal_loss(self) -> None:
+        model = DummyEmotionClassifier(num_emotions=2)
+
+        batch = (
+            torch.zeros(2, 1, 128, 8),
+            torch.tensor([8, 8], dtype=torch.long),
+            torch.tensor([0, 1], dtype=torch.long),
+        )
+
+        with patch(
+            "src.training.train_emotion.evaluate_emotion_model",
+            return_value={"accuracy": 0.5, "f1_macro": 0.5},
+        ):
+            _, summary = train_emotion_model(
+                model,
+                train_loader=[batch],
+                val_loader=[batch],
+                epochs=1,
+                lr=1e-3,
+                loss_name="focal",
+                focal_gamma=1.5,
+                scheduler_name="plateau",
+                device="cpu",
+                out_dir=None,
+            )
+
+        self.assertEqual(summary["loss_name"], "focal")
+        self.assertAlmostEqual(summary["focal_gamma"], 1.5, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

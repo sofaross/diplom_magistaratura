@@ -18,6 +18,7 @@ from src.evaluation.evaluation import evaluate_fusion_model
 from src.inference.wav2vec2_inference import extract_embedding
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
 from src.models.multimodal_model import FusionModel
+from src.training.losses import FocalCrossEntropyLoss, build_inverse_frequency_class_weights
 from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
 from src.utils.dataset_loader import (
     MelAugmentConfig,
@@ -90,6 +91,8 @@ def train_fusion_model(
     weight_decay=5e-4,
     max_grad_norm=1.0,
     *,
+    loss_name: str = "cross_entropy",
+    focal_gamma: float = 2.0,
     scheduler_name: str = "onecycle",
     onecycle_pct_start: float = 0.1,
     early_stopping_patience=6,
@@ -104,7 +107,26 @@ def train_fusion_model(
     emotion_model.to(device)
     emotion_model.eval()
 
-    criterion = nn.CrossEntropyLoss()
+    class_weights = None
+    try:
+        labels = train_loader.dataset.df["label"].tolist()
+        class_weights = build_inverse_frequency_class_weights(labels)
+    except Exception:
+        class_weights = None
+
+    loss_name = str(loss_name).lower().strip()
+    loss_weights = class_weights.to(device) if class_weights is not None else None
+    if loss_name == "cross_entropy":
+        criterion = nn.CrossEntropyLoss(weight=loss_weights)
+    elif loss_name == "focal":
+        criterion = FocalCrossEntropyLoss(
+            gamma=float(focal_gamma),
+            weight=loss_weights,
+            reduction="mean",
+        )
+    else:
+        raise ValueError(f"Unknown loss_name={loss_name!r}. Use 'cross_entropy' or 'focal'.")
+
     optimizer = optim.AdamW(fusion_model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
 
     scheduler = None
@@ -215,6 +237,8 @@ def train_fusion_model(
                     "val_metrics": val_metrics,
                     "speech_layer": int(speech_layer),
                     "speech_pool": str(speech_pool),
+                    "loss_name": loss_name,
+                    "focal_gamma": float(focal_gamma),
                 },
                 out_dir / "fusion_model_last.pt",
             )
@@ -233,6 +257,8 @@ def train_fusion_model(
                         "val_metrics": val_metrics,
                         "speech_layer": int(speech_layer),
                         "speech_pool": str(speech_pool),
+                        "loss_name": loss_name,
+                        "focal_gamma": float(focal_gamma),
                     },
                     out_dir / "fusion_model_best.pt",
                 )
@@ -253,6 +279,8 @@ def train_fusion_model(
         "best_val_accuracy": float(best_val_acc),
         "best_val_f1_macro": float(best_val_f1),
         "selection_metric": "val_f1_macro",
+        "loss_name": loss_name,
+        "focal_gamma": float(focal_gamma),
         "stopped_epoch": int(epoch),
         "speech_layer": int(speech_layer),
         "speech_pool": str(speech_pool),
@@ -283,6 +311,8 @@ def main():
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--loss", choices=["cross_entropy", "focal"], default="cross_entropy")
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument("--scheduler", choices=["none", "plateau", "onecycle"], default="onecycle")
     parser.add_argument("--onecycle-pct-start", type=float, default=0.1)
     parser.add_argument("--early-stopping-patience", type=int, default=6)
@@ -308,6 +338,10 @@ def main():
     parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
     parser.add_argument("--snr-min", type=float, default=5.0)
     parser.add_argument("--snr-max", type=float, default=20.0)
+    parser.add_argument("--fusion-projection-dim", type=int, default=256)
+    parser.add_argument("--fusion-hidden-dim", type=int, default=256)
+    parser.add_argument("--fusion-dropout", type=float, default=0.3)
+    parser.add_argument("--fusion-modality-dropout", type=float, default=0.15)
     parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--resd-dataset-name", default="Aniemore/resd")
     parser.add_argument("--resd-splits", nargs="+", default=["train"])
@@ -413,11 +447,24 @@ def main():
         num_emotions=len(emotion_map),
         device=device,
     )
+    if str(args.loss) == "focal":
+        print(f"[fusion] Используется focal loss (gamma={float(args.focal_gamma):.2f}).")
+    else:
+        print("[fusion] Используется cross-entropy loss.")
+    print(
+        f"[fusion] Fusion head: projection_dim={int(args.fusion_projection_dim)} "
+        f"hidden_dim={int(args.fusion_hidden_dim)} dropout={float(args.fusion_dropout):.2f} "
+        f"modality_dropout={float(args.fusion_modality_dropout):.2f}"
+    )
 
     fusion_model = FusionModel(
         speech_dim=speech_wrapper.hidden_size,
         emotion_dim=128,
         num_classes=len(emotion_map),
+        projection_dim=int(args.fusion_projection_dim),
+        hidden_dim=int(args.fusion_hidden_dim),
+        dropout=float(args.fusion_dropout),
+        modality_dropout_prob=float(args.fusion_modality_dropout),
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -432,6 +479,8 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
         max_grad_norm=args.max_grad_norm,
+        loss_name=args.loss,
+        focal_gamma=args.focal_gamma,
         scheduler_name=args.scheduler,
         onecycle_pct_start=args.onecycle_pct_start,
         early_stopping_patience=args.early_stopping_patience,
@@ -470,6 +519,12 @@ def main():
             "training_summary": training_summary,
             "speech_layer": int(args.speech_layer),
             "speech_pool": str(args.speech_pool),
+            "loss_name": str(args.loss),
+            "focal_gamma": float(args.focal_gamma),
+            "fusion_projection_dim": int(args.fusion_projection_dim),
+            "fusion_hidden_dim": int(args.fusion_hidden_dim),
+            "fusion_dropout": float(args.fusion_dropout),
+            "fusion_modality_dropout": float(args.fusion_modality_dropout),
         },
         out_dir / "fusion_model_final.pt",
     )
