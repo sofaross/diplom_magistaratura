@@ -252,7 +252,7 @@ def main():
     parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
     parser.add_argument("--snr-min", type=float, default=8.0)
     parser.add_argument("--snr-max", type=float, default=20.0)
-    parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--resd-dataset-name", default="Aniemore/resd")
     parser.add_argument("--resd-splits", nargs="+", default=["train"])
     args = parser.parse_args()

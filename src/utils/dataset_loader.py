@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Optional
 import librosa
 import numpy as np
 import pandas as pd
+import soundfile as sf
 import torch
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
@@ -121,7 +123,14 @@ def _extract_hf_audio_payload(speech_payload) -> tuple[np.ndarray, int]:
             audio = np.asarray(speech_payload["array"], dtype=np.float32).reshape(-1)
             sample_rate = int(speech_payload.get("sampling_rate") or DEFAULT_DATASET_CONFIG.sample_rate)
             return audio, sample_rate
-        raise ValueError("HF audio payload does not contain decoded 'array'.")
+        if speech_payload.get("bytes") is not None:
+            audio, sample_rate = sf.read(io.BytesIO(speech_payload["bytes"]), dtype="float32")
+            audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+            return audio, int(sample_rate)
+        if speech_payload.get("path"):
+            audio = load_audio(speech_payload["path"], sample_rate=int(DEFAULT_DATASET_CONFIG.sample_rate))
+            return np.asarray(audio, dtype=np.float32).reshape(-1), int(DEFAULT_DATASET_CONFIG.sample_rate)
+        raise ValueError("HF audio payload does not contain decoded audio data or a readable local path.")
 
     audio = np.asarray(speech_payload, dtype=np.float32).reshape(-1)
     return audio, int(DEFAULT_DATASET_CONFIG.sample_rate)
@@ -152,6 +161,11 @@ def load_resd_hf(
             )
 
         split = dataset_dict[split_name]
+        if hasattr(datasets_module, "Audio"):
+            try:
+                split = split.cast_column("speech", datasets_module.Audio(decode=False))
+            except Exception:
+                pass
         for index, row in enumerate(split):
             mapped_emotion = _normalize_resd_emotion(row.get("emotion", ""))
             if mapped_emotion is None:
@@ -624,7 +638,19 @@ class EmotionDataset(Dataset):
 
     @staticmethod
     def _row_has_embedded_audio(row) -> bool:
-        return isinstance(row, pd.Series) and "hf_audio" in row.index and row["hf_audio"] is not None
+        if not isinstance(row, pd.Series) or "hf_audio" not in row.index:
+            return False
+
+        value = row["hf_audio"]
+        if value is None:
+            return False
+        if isinstance(value, float) and pd.isna(value):
+            return False
+        if isinstance(value, np.ndarray):
+            return value.size > 0
+        if isinstance(value, (list, tuple, bytes, bytearray)):
+            return len(value) > 0
+        return not pd.isna(value)
 
     @staticmethod
     def _resolve_sample_id(row) -> str:
