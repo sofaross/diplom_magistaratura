@@ -308,6 +308,9 @@ def main():
     parser.add_argument("--noise-types", nargs="+", default=["white", "pink", "brown", "real"])
     parser.add_argument("--snr-min", type=float, default=5.0)
     parser.add_argument("--snr-max", type=float, default=20.0)
+    parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--resd-dataset-name", default="Aniemore/resd")
+    parser.add_argument("--resd-splits", nargs="+", default=["train"])
     args = parser.parse_args()
 
     crema_path = _resolve_repo_path(args.crema_path)
@@ -353,6 +356,12 @@ def main():
             print("[fusion] Валидация и тест останутся без шумовой аугментации.")
         else:
             print("[fusion] Waveform-level noise augmentation отключена.")
+        if bool(args.use_resd):
+            print(
+                f"[fusion] Подключён дополнительный датасет {args.resd_dataset_name} "
+                f"со split: {', '.join(str(name) for name in args.resd_splits)}."
+            )
+            print("[fusion] Emotion 'enthusiasm' будет исключена, остальные 6 эмоций будут приведены к схеме проекта.")
 
         train_ds, val_ds, test_ds, _ = prepare_multimodal_datasets(
             crema_path,
@@ -365,6 +374,9 @@ def main():
             waveform_noise_config=waveform_noise_cfg,
             max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
             cache_dir=cache_dir,
+            use_resd=bool(args.use_resd),
+            resd_dataset_name=str(args.resd_dataset_name),
+            resd_splits=tuple(str(name) for name in args.resd_splits),
         )
         if bool(args.waveform_noise_augment):
             noise_manager = getattr(train_ds, "noise_manager", None)

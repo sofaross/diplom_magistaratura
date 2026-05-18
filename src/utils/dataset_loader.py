@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import librosa
 import numpy as np
 import pandas as pd
 import torch
@@ -20,6 +22,14 @@ from src.noise.noise_manager import NoiseManager
 from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
 
 DEFAULT_DATASET_CONFIG = ProjectConfig()
+RESD_EMOTION_MAP_6: dict[str, str] = {
+    "anger": "angry",
+    "disgust": "disgust",
+    "fear": "fear",
+    "happiness": "happy",
+    "neutral": "neutral",
+    "sadness": "sad",
+}
 
 
 # ===============================
@@ -93,6 +103,83 @@ def load_ravdess(dataset_path):
 
     return df
 
+ 
+# ===============================
+# Загружаем Aniemore/resd датасет
+# ===============================
+
+def _normalize_resd_emotion(emotion: str) -> str | None:
+    normalized = str(emotion).strip().lower()
+    if normalized == "enthusiasm":
+        return None
+    return RESD_EMOTION_MAP_6.get(normalized)
+
+
+def _extract_hf_audio_payload(speech_payload) -> tuple[np.ndarray, int]:
+    if isinstance(speech_payload, dict):
+        if "array" in speech_payload:
+            audio = np.asarray(speech_payload["array"], dtype=np.float32).reshape(-1)
+            sample_rate = int(speech_payload.get("sampling_rate") or DEFAULT_DATASET_CONFIG.sample_rate)
+            return audio, sample_rate
+        raise ValueError("HF audio payload does not contain decoded 'array'.")
+
+    audio = np.asarray(speech_payload, dtype=np.float32).reshape(-1)
+    return audio, int(DEFAULT_DATASET_CONFIG.sample_rate)
+
+
+def load_resd_hf(
+    dataset_name: str = "Aniemore/resd",
+    *,
+    split_names: tuple[str, ...] = ("train",),
+    verbose: bool = True,
+) -> pd.DataFrame:
+    try:
+        datasets_module = importlib.import_module("datasets")
+    except ImportError as exc:
+        raise ValueError(
+            "Для использования Aniemore/resd установите пакет 'datasets': pip install datasets"
+        ) from exc
+
+    dataset_dict = datasets_module.load_dataset(str(dataset_name))
+    records: list[dict[str, object]] = []
+    dropped_enthusiasm = 0
+
+    for split_name in split_names:
+        if split_name not in dataset_dict:
+            available = ", ".join(sorted(dataset_dict.keys()))
+            raise ValueError(
+                f"В датасете {dataset_name!r} нет split {split_name!r}. Доступные split: {available}."
+            )
+
+        split = dataset_dict[split_name]
+        for index, row in enumerate(split):
+            mapped_emotion = _normalize_resd_emotion(row.get("emotion", ""))
+            if mapped_emotion is None:
+                dropped_enthusiasm += 1
+                continue
+
+            audio, sample_rate = _extract_hf_audio_payload(row.get("speech"))
+            sample_name = str(row.get("name") or row.get("path") or f"{split_name}_{index}")
+            sample_id = f"hf://{str(dataset_name).replace('/', '__')}/{split_name}/{sample_name}"
+
+            records.append(
+                {
+                    "path": sample_id,
+                    "emotion": mapped_emotion,
+                    "hf_audio": np.asarray(audio, dtype=np.float32),
+                    "hf_sampling_rate": int(sample_rate),
+                    "source_dataset": str(dataset_name),
+                    "source_split": str(split_name),
+                }
+            )
+
+    df = pd.DataFrame(records)
+    if verbose:
+        splits_text = ", ".join(split_names)
+        print(f"RESD ({dataset_name}) примеров после drop_enthusiasm из split [{splits_text}]: {len(df)}")
+        print(f"RESD отброшено emotion=enthusiasm: {dropped_enthusiasm}")
+    return df
+
 # ===============================
 # Кодирование эмоций
 # ===============================
@@ -158,6 +245,9 @@ def prepare_splits(crema_path, ravdess_path,
     emotion_map=None,
     verbose=True,
     emotion_set: int = 6,
+    use_resd: bool = False,
+    resd_dataset_name: str = "Aniemore/resd",
+    resd_splits: tuple[str, ...] = ("train",),
 ):
 
     if verbose:
@@ -194,6 +284,19 @@ def prepare_splits(crema_path, ravdess_path,
     df, emotion_map = encode_labels(df, emotion_to_id=emotion_map)
 
     train_df, val_df, test_df = split_dataset(df)
+
+    if bool(use_resd):
+        if int(emotion_set) != 6:
+            raise ValueError("Aniemore/resd сейчас поддерживается только для emotion_set=6.")
+        resd_df = load_resd_hf(
+            dataset_name=str(resd_dataset_name),
+            split_names=tuple(str(name) for name in resd_splits),
+            verbose=bool(verbose),
+        )
+        resd_df, _ = encode_labels(resd_df, emotion_to_id=emotion_map)
+        train_df = pd.concat([train_df, resd_df], ignore_index=True)
+        if verbose:
+            print(f"RESD добавлено в обучение: {len(resd_df)}")
 
     if verbose:
         print("Размер обучения:", len(train_df))
@@ -408,15 +511,14 @@ class EmotionDataset(Dataset):
 
         row = self.df.iloc[idx]
 
-        path = row["path"]
         label = row["label"]
 
         if self.waveform_noise_augment:
-            audio = self._load_preprocessed_audio(path)
+            audio = self._load_preprocessed_audio(row)
             audio = self._apply_waveform_noise_augmentation(audio)
             mel = self._compute_mel_from_audio(audio)
         else:
-            mel = self._load_or_compute_mel(path)
+            mel = self._load_or_compute_mel(row)
 
         if self.augment:
             mel = self._augment_mel(mel)
@@ -473,14 +575,15 @@ class EmotionDataset(Dataset):
         if "random" in self.normalized_waveform_noise_types and not self.available_all_noise_types:
             raise ValueError("waveform noise augmentation: ?? ??????? ?? ?????? ?????????? ????.")
 
-    def _cache_path(self, audio_path: str) -> Optional[Path]:
+    def _cache_path(self, row) -> Optional[Path]:
         if not self.use_cache or self.cache_dir is None:
             return None
-        key = hashlib.md5(audio_path.encode("utf-8")).hexdigest()
+        sample_id = self._resolve_sample_id(row)
+        key = hashlib.md5(sample_id.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{key}.pt"
 
-    def _load_or_compute_mel(self, audio_path: str) -> torch.Tensor:
-        cache_path = self._cache_path(audio_path)
+    def _load_or_compute_mel(self, row) -> torch.Tensor:
+        cache_path = self._cache_path(row)
         if cache_path is not None and cache_path.exists():
             mel = torch.load(cache_path, map_location="cpu")
             if isinstance(mel, dict) and "mel" in mel:
@@ -489,7 +592,7 @@ class EmotionDataset(Dataset):
                 raise ValueError(f"???????????? ?????? ???? mel: {cache_path}")
             return mel
 
-        audio = self._load_preprocessed_audio(audio_path)
+        audio = self._load_preprocessed_audio(row)
         mel = self._compute_mel_from_audio(audio)
 
         if cache_path is not None:
@@ -498,8 +601,19 @@ class EmotionDataset(Dataset):
 
         return mel
 
-    def _load_preprocessed_audio(self, audio_path: str) -> np.ndarray:
-        audio = load_audio(audio_path)
+    def _load_preprocessed_audio(self, row) -> np.ndarray:
+        if self._row_has_embedded_audio(row):
+            audio = np.asarray(row["hf_audio"], dtype=np.float32).reshape(-1)
+            source_sample_rate = int(row.get("hf_sampling_rate", DEFAULT_DATASET_CONFIG.sample_rate))
+            if source_sample_rate != int(DEFAULT_DATASET_CONFIG.sample_rate):
+                audio = librosa.resample(
+                    audio,
+                    orig_sr=int(source_sample_rate),
+                    target_sr=int(DEFAULT_DATASET_CONFIG.sample_rate),
+                )
+        else:
+            audio_path = self._resolve_sample_id(row)
+            audio = load_audio(audio_path)
         audio = normalize_audio(audio)
         audio = trim_silence(audio)
 
@@ -507,6 +621,16 @@ class EmotionDataset(Dataset):
         if prepared_audio.size == 0:
             return np.zeros(160, dtype=np.float32)
         return prepared_audio
+
+    @staticmethod
+    def _row_has_embedded_audio(row) -> bool:
+        return isinstance(row, pd.Series) and "hf_audio" in row.index and row["hf_audio"] is not None
+
+    @staticmethod
+    def _resolve_sample_id(row) -> str:
+        if isinstance(row, pd.Series):
+            return str(row["path"])
+        return str(row)
 
     def _compute_mel_from_audio(self, audio: np.ndarray) -> torch.Tensor:
         mel_np = extract_mel_spectrogram(np.asarray(audio, dtype=np.float32))
@@ -622,15 +746,14 @@ class MultimodalDataset(EmotionDataset):
 
         row = self.df.iloc[idx]
 
-        path = row["path"]
         label = row["label"]
 
-        audio = self._load_preprocessed_audio(path)
+        audio = self._load_preprocessed_audio(row)
         if self.waveform_noise_augment:
             audio = self._apply_waveform_noise_augmentation(audio)
             mel = self._compute_mel_from_audio(audio)
         else:
-            mel = self._load_or_compute_mel(path)
+            mel = self._load_or_compute_mel(row)
 
         if self.augment:
             mel = self._augment_mel(mel)
@@ -735,6 +858,9 @@ def prepare_datasets(
     waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
     max_frames: Optional[int] = None,
     cache_dir: Optional[Path] = None,
+    use_resd: bool = False,
+    resd_dataset_name: str = "Aniemore/resd",
+    resd_splits: tuple[str, ...] = ("train",),
 ):
 
     train_df, val_df, test_df, emotion_map = prepare_splits(
@@ -742,6 +868,9 @@ def prepare_datasets(
         ravdess_path,
         verbose=True,
         emotion_set=emotion_set,
+        use_resd=bool(use_resd),
+        resd_dataset_name=str(resd_dataset_name),
+        resd_splits=tuple(str(name) for name in resd_splits),
     )
 
     return (
@@ -790,6 +919,9 @@ def prepare_multimodal_datasets(
     waveform_noise_config: Optional[WaveformNoiseAugmentConfig] = None,
     max_frames: Optional[int] = None,
     cache_dir: Optional[Path] = None,
+    use_resd: bool = False,
+    resd_dataset_name: str = "Aniemore/resd",
+    resd_splits: tuple[str, ...] = ("train",),
 ):
 
     train_df, val_df, test_df, emotion_map = prepare_splits(
@@ -798,6 +930,9 @@ def prepare_multimodal_datasets(
         emotion_map=emotion_map,
         verbose=True,
         emotion_set=emotion_set,
+        use_resd=bool(use_resd),
+        resd_dataset_name=str(resd_dataset_name),
+        resd_splits=tuple(str(name) for name in resd_splits),
     )
 
     return (
