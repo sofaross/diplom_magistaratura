@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+from configs.config import ProjectConfig
 from src.evaluation.evaluation import evaluate_fusion_model
 from src.inference.wav2vec2_inference import extract_embedding
 from src.models.emotion_model import EmotionModel, EmotionModelImproved
@@ -97,6 +98,7 @@ def train_fusion_model(
     onecycle_pct_start: float = 0.1,
     early_stopping_patience=6,
     early_stopping_min_delta=1e-4,
+    use_class_weights: bool = True,
     speech_layer: int = -1,
     speech_pool: str = "mean",
     device="cpu",
@@ -108,11 +110,12 @@ def train_fusion_model(
     emotion_model.eval()
 
     class_weights = None
-    try:
-        labels = train_loader.dataset.df["label"].tolist()
-        class_weights = build_inverse_frequency_class_weights(labels)
-    except Exception:
-        class_weights = None
+    if bool(use_class_weights):
+        try:
+            labels = train_loader.dataset.df["label"].tolist()
+            class_weights = build_inverse_frequency_class_weights(labels)
+        except Exception:
+            class_weights = None
 
     loss_name = str(loss_name).lower().strip()
     loss_weights = class_weights.to(device) if class_weights is not None else None
@@ -281,6 +284,7 @@ def train_fusion_model(
         "selection_metric": "val_f1_macro",
         "loss_name": loss_name,
         "focal_gamma": float(focal_gamma),
+        "use_class_weights": bool(use_class_weights),
         "stopped_epoch": int(epoch),
         "speech_layer": int(speech_layer),
         "speech_pool": str(speech_pool),
@@ -289,15 +293,16 @@ def train_fusion_model(
 
 
 def main():
+    config = ProjectConfig()
     parser = argparse.ArgumentParser(prog="python -m src.training.train_multimodal")
     parser.add_argument("--crema-path", default="data/raw/crema-d/AudioWAV")
     parser.add_argument("--ravdess-path", default="data/raw/ravdess")
     parser.add_argument("--emotion-set", type=int, choices=[6, 8], default=6)
     parser.add_argument(
         "--speech-model-name",
-        default="facebook/wav2vec2-base-960h",
+        default=str(config.speech_model_name_en),
         help=(
-            "Wav2Vec2 CTC модель из HuggingFace. "
+            "Локальная Wav2Vec2 CTC модель или каталог HuggingFace cache. "
             "Для fusion используется её acoustic embedding, а не распознанный текст."
         ),
     )
@@ -343,8 +348,12 @@ def main():
     parser.add_argument("--fusion-dropout", type=float, default=0.3)
     parser.add_argument("--fusion-modality-dropout", type=float, default=0.15)
     parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--resd-mode", choices=["train_only", "full_mix"], default="full_mix")
     parser.add_argument("--resd-dataset-name", default="Aniemore/resd")
     parser.add_argument("--resd-splits", nargs="+", default=["train"])
+    parser.add_argument("--quality-filter", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--quality-filter-iqr-multiplier", type=float, default=1.5)
+    parser.add_argument("--class-weights", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     crema_path = _resolve_repo_path(args.crema_path)
@@ -395,7 +404,18 @@ def main():
                 f"[fusion] Подключён дополнительный датасет {args.resd_dataset_name} "
                 f"со split: {', '.join(str(name) for name in args.resd_splits)}."
             )
+            if str(args.resd_mode) == "train_only":
+                print("[fusion] RESD будет добавлен только в train после базового split.")
+            else:
+                print("[fusion] RESD будет полностью смешан с CREMA-D и RAVDESS до разбиения на train/val/test.")
             print("[fusion] Emotion 'enthusiasm' будет исключена, остальные 6 эмоций будут приведены к схеме проекта.")
+        if bool(args.quality_filter):
+            print(
+                f"[fusion] Включена фильтрация аномальных записей по качеству "
+                f"(boxplot/IQR, множитель={float(args.quality_filter_iqr_multiplier):g})."
+            )
+        else:
+            print("[fusion] Фильтрация аномальных записей по качеству отключена.")
 
         train_ds, val_ds, test_ds, _ = prepare_multimodal_datasets(
             crema_path,
@@ -409,8 +429,11 @@ def main():
             max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
             cache_dir=cache_dir,
             use_resd=bool(args.use_resd),
+            resd_mode=str(args.resd_mode),
             resd_dataset_name=str(args.resd_dataset_name),
             resd_splits=tuple(str(name) for name in args.resd_splits),
+            quality_filter=bool(args.quality_filter),
+            quality_filter_iqr_multiplier=float(args.quality_filter_iqr_multiplier),
         )
         if bool(args.waveform_noise_augment):
             noise_manager = getattr(train_ds, "noise_manager", None)
@@ -451,6 +474,7 @@ def main():
         print(f"[fusion] Используется focal loss (gamma={float(args.focal_gamma):.2f}).")
     else:
         print("[fusion] Используется cross-entropy loss.")
+    print(f"[fusion] Class weights: {'enabled' if bool(args.class_weights) else 'disabled'}.")
     print(
         f"[fusion] Fusion head: projection_dim={int(args.fusion_projection_dim)} "
         f"hidden_dim={int(args.fusion_hidden_dim)} dropout={float(args.fusion_dropout):.2f} "
@@ -485,6 +509,7 @@ def main():
         onecycle_pct_start=args.onecycle_pct_start,
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
+        use_class_weights=bool(args.class_weights),
         speech_layer=args.speech_layer,
         speech_pool=args.speech_pool,
         device=device,

@@ -60,8 +60,14 @@ class TextCorrectionService:
     def _get_model_pair(self, language: str) -> tuple[Any, Any]:
         if language not in self._models:
             model_name = self.model_names[language]
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                local_files_only=bool(self.config.local_files_only),
+            )
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                model_name,
+                local_files_only=bool(self.config.local_files_only),
+            )
             model.to(self.device)
             model.eval()
             self._tokenizers[language] = tokenizer

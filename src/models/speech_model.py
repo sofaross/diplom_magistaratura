@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 
+from configs.model_runtime import DEFAULT_SPEECH_MODEL
 from src.inference.wav2vec2_inference import extract_embedding, transcribe, transcribe_and_embed
 from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
 
@@ -32,7 +33,7 @@ class Wav2Vec2Multimodal:
 
     def __init__(
         self,
-        model_name: str = "facebook/wav2vec2-base-960h",
+        model_name: str = DEFAULT_SPEECH_MODEL,
         *,
         device: str | torch.device | None = None,
         sample_rate: int = 16000,

@@ -19,6 +19,8 @@ from pathlib import Path
 
 import torch
 
+from configs.model_runtime import DEFAULT_SPEECH_MODEL
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 if __name__ == "__main__" and __package__ is None:
@@ -58,7 +60,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model-name",
-        default="facebook/wav2vec2-base-960h",
+        default=DEFAULT_SPEECH_MODEL,
         help=(
             "Wav2Vec2 CTC модель из HuggingFace. "
             "Важно: для распознавания текста нужна модель, дообученная под ASR (CTC head)."

@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, str(REPO_ROOT))
 
+from configs.config import ProjectConfig
 from src.constants.emotions import EMOTION_RU
 from src.models.emotion_recognizer import EmotionRecognizer
 from src.models.wav2vec2_wrapper import Wav2Vec2Wrapper
@@ -43,7 +44,7 @@ class RealtimeSpeechEmotionRecognizer:
         r = RealtimeSpeechEmotionRecognizer(
             emotion_model_path="data/processed/models/emotion/emotion_model_final.pt",
             emotion_map_path="data/processed/models/emotion/emotion_map.json",
-            speech_model_name="facebook/wav2vec2-base-960h",
+            speech_model_name="data/processed/models/asr/en",
         )
         r.process_live(duration=5)
     """
@@ -52,19 +53,20 @@ class RealtimeSpeechEmotionRecognizer:
         self,
         emotion_model_path: str | Path,
         emotion_map_path: str | Path,
-        speech_model_name: str = "facebook/wav2vec2-base-960h",
+        speech_model_name: str | None = None,
     ):
         """Инициализирует компоненты.
 
         Args:
             emotion_model_path: путь к чекпоинту emotion модели (.pt).
             emotion_map_path: путь к emotion_map.json.
-            speech_model_name: имя Wav2Vec2 CTC модели в HuggingFace (ASR).
+            speech_model_name: локальный каталог Wav2Vec2 CTC модели (ASR).
 
         Raises:
             RuntimeError/ValueError: если emotion модель или emotion_map не загрузились.
         """
 
+        config = ProjectConfig()
         self.sample_rate: int = 16000
         self.device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -87,7 +89,7 @@ class RealtimeSpeechEmotionRecognizer:
         self.speech_load_error: str | None = None
         try:
             self.speech = Wav2Vec2Wrapper.from_pretrained(
-                model_name=speech_model_name,
+                model_name=str(speech_model_name or config.speech_model_name),
                 device=self.device,
                 sample_rate=self.sample_rate,
             )
@@ -197,10 +199,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--speech-model",
-        default="facebook/wav2vec2-base-960h",
+        default=None,
         help=(
-            "Wav2Vec2 CTC ASR модель из HuggingFace. "
-            "Пример для русского: jonatasgrosman/wav2vec2-large-xlsr-53-russian"
+            "Локальная Wav2Vec2 CTC ASR модель или локальный каталог HuggingFace cache. "
+            "Пример для русского: data/processed/models/asr/ru"
         ),
     )
     args = parser.parse_args(argv)

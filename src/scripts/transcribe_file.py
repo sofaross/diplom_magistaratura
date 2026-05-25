@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 
 from configs.config import ProjectConfig
+from configs.model_runtime import DEFAULT_SPEECH_MODEL
 from src.audio_io.audio_file_manager import AudioFileManager
 from src.inference.wav2vec2_inference import transcribe
 from src.models.speech_model import Wav2Vec2Multimodal
@@ -56,7 +57,7 @@ def transcribe_file(
             if device is None:
                 device = "cuda" if torch.cuda.is_available() else "cpu"
             model = Wav2Vec2Wrapper.from_pretrained(
-                model_name="facebook/wav2vec2-base-960h",
+                model_name=DEFAULT_SPEECH_MODEL,
                 device=device,
             )
         except Exception as e:

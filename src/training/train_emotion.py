@@ -58,6 +58,7 @@ def train_emotion_model(
     onecycle_pct_start: float = 0.1,
     early_stopping_patience=8,
     early_stopping_min_delta=1e-4,
+    use_class_weights: bool = True,
     device="cpu",
     out_dir=None,
 ):
@@ -65,11 +66,12 @@ def train_emotion_model(
     model.to(device)
 
     class_weights = None
-    try:
-        labels = train_loader.dataset.df["label"].tolist()
-        class_weights = build_inverse_frequency_class_weights(labels)
-    except Exception:
-        class_weights = None
+    if bool(use_class_weights):
+        try:
+            labels = train_loader.dataset.df["label"].tolist()
+            class_weights = build_inverse_frequency_class_weights(labels)
+        except Exception:
+            class_weights = None
 
     loss_name = str(loss_name).lower().strip()
     loss_weights = class_weights.to(device) if class_weights is not None else None
@@ -224,6 +226,7 @@ def train_emotion_model(
         "selection_metric": "val_f1_macro",
         "loss_name": loss_name,
         "focal_gamma": float(focal_gamma),
+        "use_class_weights": bool(use_class_weights),
         "stopped_epoch": int(epoch),
     }
     return model, training_summary
@@ -242,7 +245,7 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=5e-4)
     parser.add_argument("--label-smoothing", type=float, default=0.05)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--loss", choices=["cross_entropy", "focal"], default="cross_entropy")
+    parser.add_argument("--loss", choices=["cross_entropy", "focal"], default="focal")
     parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument("--scheduler", choices=["plateau", "onecycle"], default="onecycle")
     parser.add_argument("--onecycle-pct-start", type=float, default=0.1)
@@ -255,12 +258,7 @@ def main():
     parser.add_argument("--cache-dir", default="data/processed/features/mel_cache")
     parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--balanced-sampling", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument(
-        "--max-frames",
-        type=int,
-        default=0,
-        help="Если >0, ограничивает длину mel по времени (train=random crop, val/test=center crop).",
-    )
+    parser.add_argument("--max-frames",type=int,default=0,help="Если >0, ограничивает длину mel по времени (train=random crop, val/test=center crop).",)
     parser.add_argument("--noise-std-max", type=float, default=0.25)
     parser.add_argument("--time-stretch-min", type=float, default=0.85)
     parser.add_argument("--time-stretch-max", type=float, default=1.20)
@@ -272,8 +270,12 @@ def main():
     parser.add_argument("--snr-min", type=float, default=8.0)
     parser.add_argument("--snr-max", type=float, default=20.0)
     parser.add_argument("--use-resd", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--resd-mode", choices=["train_only", "full_mix"], default="full_mix")
     parser.add_argument("--resd-dataset-name", default="Aniemore/resd")
     parser.add_argument("--resd-splits", nargs="+", default=["train"])
+    parser.add_argument("--quality-filter", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--quality-filter-iqr-multiplier", type=float, default=2.0)
+    parser.add_argument("--class-weights", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     crema_path = _resolve_repo_path(args.crema_path)
@@ -314,7 +316,18 @@ def main():
                 f"[эмоция] Подключён дополнительный датасет {args.resd_dataset_name} "
                 f"со split: {', '.join(str(name) for name in args.resd_splits)}."
             )
+            if str(args.resd_mode) == "train_only":
+                print("[эмоция] RESD будет добавлен только в train после базового split.")
+            else:
+                print("[эмоция] RESD будет полностью смешан с CREMA-D и RAVDESS до разбиения на train/val/test.")
             print("[эмоция] Emotion 'enthusiasm' будет исключена, остальные 6 эмоций будут приведены к схеме проекта.")
+        if bool(args.quality_filter):
+            print(
+                f"[эмоция] Включена фильтрация аномальных записей по качеству "
+                f"(boxplot/IQR, множитель={float(args.quality_filter_iqr_multiplier):g})."
+            )
+        else:
+            print("[эмоция] Фильтрация аномальных записей по качеству отключена.")
 
         train_ds, val_ds, test_ds, emotion_map = prepare_datasets(
             crema_path,
@@ -327,8 +340,11 @@ def main():
             max_frames=(int(args.max_frames) if int(args.max_frames) > 0 else None),
             cache_dir=cache_dir,
             use_resd=bool(args.use_resd),
+            resd_mode=str(args.resd_mode),
             resd_dataset_name=str(args.resd_dataset_name),
             resd_splits=tuple(str(name) for name in args.resd_splits),
+            quality_filter=bool(args.quality_filter),
+            quality_filter_iqr_multiplier=float(args.quality_filter_iqr_multiplier),
         )
 
         if bool(args.waveform_noise_augment):
@@ -377,6 +393,8 @@ def main():
     else:
         print("[эмоция] Используется cross-entropy loss.")
 
+    print(f"[эмоция] Class weights: {'enabled' if bool(args.class_weights) else 'disabled'}.")
+
     model, training_summary = train_emotion_model(
         model,
         train_loader,
@@ -394,6 +412,7 @@ def main():
         mixup_prob=args.mixup_prob,
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
+        use_class_weights=bool(args.class_weights),
         device=args.device,
         out_dir=out_dir,
     )

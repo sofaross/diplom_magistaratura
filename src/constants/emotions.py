@@ -25,6 +25,16 @@ RAVDESS_EMOTIONS: dict[str, str] = {
 }
 
 
+RESD_EMOTION_MAP_6: dict[str, str] = {
+    "anger": "angry",
+    "disgust": "disgust",
+    "fear": "fear",
+    "happiness": "happy",
+    "neutral": "neutral",
+    "sadness": "sad",
+}
+
+
 EMOTION_RU: dict[str, str] = {
     "neutral": "нейтрально",
     "happy": "радость",

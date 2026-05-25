@@ -7,15 +7,12 @@ from typing import Any
 import torch
 from transformers import AutoModelForCTC, AutoProcessor, Wav2Vec2Processor
 
+from configs.model_runtime import DEFAULT_SPEECH_MODEL, LOCAL_FILES_ONLY
+
 
 @dataclass(slots=True)
 class Wav2Vec2Wrapper:
-    """Лёгкая обёртка над загруженной Wav2Vec2 CTC-моделью и её processor.
-
-    Класс ничего не знает про предобработку аудио, декодирование или pooling.
-    Его задача только одна: загрузить модель, хранить её и отдавать базовые
-    свойства, которые нужны инференс-функциям.
-    """
+    """Лёгкая обёртка над загруженной Wav2Vec2 CTC-моделью и её processor."""
 
     model_name: str
     device: torch.device
@@ -26,11 +23,12 @@ class Wav2Vec2Wrapper:
     @classmethod
     def from_pretrained(
         cls,
-        model_name: str = "facebook/wav2vec2-base-960h",
+        model_name: str = DEFAULT_SPEECH_MODEL,
         device: str | torch.device | None = None,
         sample_rate: int = 16000,
+        local_files_only: bool = LOCAL_FILES_ONLY,
     ) -> "Wav2Vec2Wrapper":
-        """Загружает processor и CTC-модель из HuggingFace и переносит их на нужное устройство."""
+        """Загружает processor и CTC-модель с учётом общего режима offline/online."""
 
         resolved_device = (
             torch.device(device)
@@ -40,12 +38,19 @@ class Wav2Vec2Wrapper:
         cls._raise_if_incomplete_cache_detected(model_name)
 
         try:
-            processor = cls._load_processor(model_name)
-            model = AutoModelForCTC.from_pretrained(model_name)
+            processor = cls._load_processor(model_name, local_files_only=local_files_only)
+            model = AutoModelForCTC.from_pretrained(
+                model_name,
+                local_files_only=bool(local_files_only),
+            )
         except Exception as exc:
+            hint = (
+                "Ожидалась локальная папка модели или уже готовый локальный HuggingFace cache."
+                if local_files_only
+                else "Проверьте имя модели и доступность Hugging Face."
+            )
             raise RuntimeError(
-                f"Не удалось загрузить Wav2Vec2 CTC модель {model_name!r}. "
-                "Проверьте имя модели и наличие интернета/кэша HuggingFace."
+                f"Не удалось загрузить Wav2Vec2 CTC модель {model_name!r}. {hint}"
             ) from exc
 
         model.to(resolved_device)
@@ -60,14 +65,20 @@ class Wav2Vec2Wrapper:
         )
 
     @staticmethod
-    def _load_processor(model_name: str) -> Any:
+    def _load_processor(model_name: str, *, local_files_only: bool) -> Any:
         try:
-            return AutoProcessor.from_pretrained(model_name)
+            return AutoProcessor.from_pretrained(
+                model_name,
+                local_files_only=bool(local_files_only),
+            )
         except ImportError as exc:
             error_text = str(exc)
             if "pyctcdecode" not in error_text:
                 raise
-            return Wav2Vec2Processor.from_pretrained(model_name)
+            return Wav2Vec2Processor.from_pretrained(
+                model_name,
+                local_files_only=bool(local_files_only),
+            )
 
     @staticmethod
     def _raise_if_incomplete_cache_detected(model_name: str) -> None:
@@ -87,8 +98,6 @@ class Wav2Vec2Wrapper:
 
     @property
     def hidden_size(self) -> int:
-        """Размерность скрытого представления, которое используется как speech embedding."""
-
         config = getattr(self.model, "config", None)
         if config is not None and hasattr(config, "hidden_size"):
             return int(config.hidden_size)
@@ -96,14 +105,10 @@ class Wav2Vec2Wrapper:
 
     @property
     def embedding_dim(self) -> int:
-        """Совместимый алиас для кода, где раньше использовалось имя embedding_dim."""
-
         return self.hidden_size
 
     @property
     def base_model(self) -> torch.nn.Module:
-        """Возвращает базовую акустическую часть модели без CTC-головы."""
-
         if hasattr(self.model, "wav2vec2"):
             return self.model.wav2vec2
         for attr_name in ("hubert", "data2vec_audio"):

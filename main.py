@@ -31,11 +31,16 @@ def _smoke_check() -> None:
     print("src smoke-check: OK")
 
 
+def _print_runtime_mode(config, *, speech_model_override: str | None = None) -> None:
+    mode = "OFFLINE" if bool(config.local_files_only) else "ONLINE"
+    print(f"[main] Режим запуска моделей распознавания речи: {mode}")
+
 def _run_pipeline(args: argparse.Namespace) -> int:
     from configs.config import ProjectConfig
     from src.pipeline import MultimodalPipeline
 
     config = ProjectConfig()
+    _print_runtime_mode(config, speech_model_override=args.speech_model)
     pipeline = MultimodalPipeline(
         config=config,
         speech_model_name=args.speech_model,
@@ -76,8 +81,11 @@ def _run_pipeline(args: argparse.Namespace) -> int:
 
 
 def _run_interactive(args: argparse.Namespace) -> int:
+    from configs.config import ProjectConfig
     from src.scripts.run_interactive_pipeline import InteractivePipelineRunner
 
+    config = ProjectConfig()
+    _print_runtime_mode(config, speech_model_override=args.speech_model)
     runner = InteractivePipelineRunner(
         speech_model_name=args.speech_model,
         emotion_model_path=args.emotion_model,
