@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from configs.config import ProjectConfig
-from src.features.feature_extraction import extract_mel_spectrogram
+from src.features.feature_extraction import MEL_FEATURE_VERSION, extract_mel_spectrogram
 from src.noise.noise_manager import NoiseManager
 from src.preprocessing.audio_processing import load_audio, normalize_audio, trim_silence
 from src.utils.dataset_sources import DEFAULT_DATASET_CONFIG, prepare_splits
@@ -256,7 +256,8 @@ class EmotionDataset(Dataset):
         if not self.use_cache or self.cache_dir is None:
             return None
         sample_id = self._resolve_sample_id(row)
-        key = hashlib.md5(sample_id.encode("utf-8")).hexdigest()
+        cache_key = f"{MEL_FEATURE_VERSION}::{sample_id}"
+        key = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{key}.pt"
 
     def _load_or_compute_mel(self, row) -> torch.Tensor:
